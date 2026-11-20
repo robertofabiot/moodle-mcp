@@ -27,9 +27,21 @@ cargo install --path .
 # Iniciar sesión e intercambiar credenciales por un token del web service
 moodle-mcp login
 
+# O especificando el tipo de almacén (auto por defecto, keyring o file)
+moodle-mcp --store auto login
+
 # Verificar la sesión activa
 moodle-mcp whoami
 ```
+
+> **Recarga dinámica de sesión:** Si el servidor MCP ya está en ejecución (por ejemplo, lanzado por Claude Code, Cursor o Claude Desktop) y no había sesión activa o el token expiró, puedes ejecutar `moodle-mcp login` en cualquier terminal. El servidor detectará y recargará automáticamente la nueva sesión en la siguiente invocación de herramienta sin necesidad de reiniciar el servidor MCP ni el cliente.
+
+### Opciones de Almacenamiento (`--store`)
+
+El flag global `--store` permite seleccionar el almacén de credenciales:
+- `auto` (por defecto): Intenta almacenar y leer del keyring del sistema operativo; si no está disponible o falla, utiliza automáticamente un archivo local (`credentials.json`) con permisos restrictivos `0600`.
+- `keyring`: Utiliza exclusivamente el almacén seguro del sistema operativo (Secret Service / KWallet en Linux, Keychain en macOS, Credential Manager en Windows).
+- `file`: Utiliza exclusivamente el archivo local `credentials.json` protegido con permisos `0600`.
 
 ---
 
@@ -102,6 +114,6 @@ Puedes personalizar el comportamiento de `moodle-mcp` mediante variables de ento
 
 - `MOODLE_BASE_URL`: URL base de la instancia de Moodle (por defecto `https://uamvirtual.uam.edu.ni/grado`).
 - `MOODLE_TOKEN`: Token de autenticación directo (omite la lectura del keyring o archivo).
-- `MOODLE_PRIVATE_TOKEN`: Token privado complementario para descarga de archivos autorizados.
+- `MOODLE_PRIVATE_TOKEN`: Token privado (`privatetoken`) devuelto en el inicio de sesión de Moodle para autologin en el navegador y descarga autorizada de archivos.
 - `MOODLE_MCP_DOWNLOAD_DIR`: Directorio base para descargas y respuestas truncadas (por defecto `~/Downloads/moodle-mcp`).
 - `MOODLE_MCP_MAX_RESPONSE_BYTES`: Tamaño máximo en bytes de una respuesta antes de truncarla y guardarla en archivo (por defecto `60000`).
