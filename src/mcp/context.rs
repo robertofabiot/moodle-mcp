@@ -249,15 +249,21 @@ impl AppContext {
     /// Formatea una respuesta de éxito con truncado a archivo si excede `max_response_bytes`
     /// y sanitización de tokens.
     pub fn ok_json<T: Serialize>(&self, value: &T, function: &str) -> CallToolResult {
-        let json_text = crate::mcp::output::ok_json(
+        let tok = self.token();
+        let priv_tok = self.private_token();
+        match crate::mcp::output::ok_json(
             value,
             self.config.max_response_bytes,
             &self.config.download_dir,
             function,
-        );
-        let tok = self.token();
-        let priv_tok = self.private_token();
-        crate::mcp::output::tool_success(&json_text, tok.as_deref(), priv_tok.as_deref())
+            tok.as_deref(),
+            priv_tok.as_deref(),
+        ) {
+            Ok(json_text) => {
+                crate::mcp::output::tool_success(&json_text, tok.as_deref(), priv_tok.as_deref())
+            }
+            Err(err) => err,
+        }
     }
 
     /// Genera una respuesta de error MCP tipada y sanitizada.
