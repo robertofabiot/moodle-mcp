@@ -441,3 +441,131 @@ async fn test_circuit_breaker_counts_retried_operation_as_single_failure() {
     assert_eq!(client.breaker().state(), CircuitState::Down);
     assert!(client.breaker().is_open());
 }
+
+#[tokio::test]
+async fn test_login_captures_privatetoken_when_present_and_none_when_missing() {
+    let server = MockServer::start().await;
+
+    // Caso 1: token.php incluye privatetoken
+    Mock::given(method("POST"))
+        .and(path("/login/token.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "tok_123",
+            "privatetoken": "priv_secret_456"
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "userid": 10001,
+            "fullname": "Estudiante Privado",
+            "functions": []
+        })))
+        .mount(&server)
+        .await;
+
+    let client = MoodleClient::from_builder(
+        MoodleClientBuilder::new()
+            .base_url(server.uri())
+            .gate(MoodleGate::new(4, 3).without_jitter())
+            .max_retries(0),
+    );
+
+    let info_with_priv = client
+        .login("user1", zeroize::Zeroizing::new("pass1".into()))
+        .await
+        .unwrap();
+
+    assert_eq!(info_with_priv.token, "tok_123");
+    assert_eq!(
+        info_with_priv.private_token.as_deref(),
+        Some("priv_secret_456")
+    );
+    assert_eq!(info_with_priv.userid, 10001);
+
+    // Caso 2: token.php NO incluye privatetoken
+    Mock::given(method("POST"))
+        .and(path("/login/token.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "tok_nopriv"
+        })))
+        .mount(&server)
+        .await;
+
+    let info_no_priv = client
+        .login("user2", zeroize::Zeroizing::new("pass2".into()))
+        .await
+        .unwrap();
+
+    assert_eq!(info_no_priv.token, "tok_nopriv");
+    assert_eq!(info_no_priv.private_token, None);
+}
+
+#[tokio::test]
+async fn test_resolve_credentials_moodle_token_priority_over_store() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "userid": 9999,
+            "username": "env_cif",
+            "fullname": "Usuario Env Var",
+            "functions": []
+        })))
+        .mount(&server)
+        .await;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("creds.json");
+    let store = moodle_mcp::credentials::CredentialStore::with_file(file_path);
+
+    // Guardar credenciales de almacén en archivo
+    let file_creds = moodle_mcp::credentials::Credentials {
+        base_url: server.uri(),
+        token: "tok_stored_in_file".into(),
+        private_token: None,
+        userid: 555,
+        username: "stored_cif".into(),
+        fullname: "Usuario Archivo".into(),
+    };
+    store.save(&file_creds).unwrap();
+
+    let client = MoodleClient::from_builder(
+        MoodleClientBuilder::new()
+            .base_url(server.uri())
+            .gate(MoodleGate::new(4, 3).without_jitter())
+            .max_retries(0),
+    );
+
+    let config = moodle_mcp::config::Config {
+        base_url: server.uri(),
+        download_dir: temp_dir.path().join("downloads"),
+        max_response_bytes: 60000,
+        max_inline_image_bytes: 1000000,
+    };
+
+    // Sin variable de entorno: resuelve desde el almacén
+    let resolved_from_store =
+        moodle_mcp::credentials::resolve_credentials(&config, &store, &client)
+            .await
+            .unwrap()
+            .expect("Debería encontrar credenciales en almacén");
+    assert_eq!(resolved_from_store.token, "tok_stored_in_file");
+    assert_eq!(resolved_from_store.userid, 555);
+
+    // Con variable de entorno MOODLE_TOKEN: tiene prioridad
+    std::env::set_var("MOODLE_TOKEN", "tok_from_env_var");
+    let resolved_from_env = moodle_mcp::credentials::resolve_credentials(&config, &store, &client)
+        .await
+        .unwrap()
+        .expect("Debería resolver desde env");
+    assert_eq!(resolved_from_env.token, "tok_from_env_var");
+    assert_eq!(resolved_from_env.userid, 9999);
+    assert_eq!(resolved_from_env.fullname, "Usuario Env Var");
+
+    std::env::remove_var("MOODLE_TOKEN");
+}
