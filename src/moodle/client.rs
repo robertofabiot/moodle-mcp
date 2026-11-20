@@ -8,8 +8,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const DEFAULT_BASE_URL: &str = "https://uamvirtual.uam.edu.ni/grado";
-pub const DEFAULT_USER_AGENT: &str =
-    concat!("moodle-mcp/", env!("CARGO_PKG_VERSION"), " (+https://github.com/robertofabiot/moodle-mcp)");
+pub const DEFAULT_USER_AGENT: &str = concat!(
+    "moodle-mcp/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/robertofabiot/moodle-mcp)"
+);
 pub const CONNECT_TIMEOUT_SECS: u64 = 10;
 pub const REQUEST_TIMEOUT_SECS: u64 = 20;
 
