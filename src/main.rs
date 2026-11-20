@@ -1,9 +1,11 @@
 use clap::{Parser, Subcommand};
 use moodle_mcp::config::{normalize_base_url, Config};
 use moodle_mcp::credentials::{resolve_credentials, CredentialStore, Credentials, StoreKind};
+use moodle_mcp::mcp::{AppContext, MoodleMcp};
 use moodle_mcp::moodle::client::{MoodleClient, MoodleClientBuilder};
 use moodle_mcp::moodle::gate::Priority;
 use std::io::{self, Write};
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 #[derive(Parser)]
@@ -127,8 +129,30 @@ async fn main() -> anyhow::Result<()> {
             println!("Funciones habilitadas: {}", functions_count);
         }
         Some(Commands::Serve) | None => {
-            eprintln!("El servidor MCP aún no está disponible en esta versión");
-            std::process::exit(2);
+            tracing_subscriber::fmt()
+                .with_writer(std::io::stderr)
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "moodle_mcp=info".into()),
+                )
+                .init();
+
+            let client = MoodleClient::from_builder(
+                MoodleClientBuilder::new().base_url(config.base_url.clone()),
+            );
+
+            let creds = resolve_credentials(&config, &store, &client)
+                .await
+                .ok()
+                .flatten();
+
+            let ctx = Arc::new(AppContext::new(config, creds, client));
+            let server = MoodleMcp::new(ctx);
+            server
+                .serve(rmcp::transport::io::stdio())
+                .await?
+                .waiting()
+                .await?;
         }
     }
 

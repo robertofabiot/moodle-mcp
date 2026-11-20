@@ -2,7 +2,7 @@ use crate::moodle::client::MoodleClient;
 use crate::moodle::envelope::decode_envelope;
 use crate::moodle::error::{MoodleError, Result};
 use crate::moodle::gate::Priority;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 /// Información resultante de una autenticación exitosa en Moodle.
@@ -32,14 +32,14 @@ struct TokenResponse {
 }
 
 /// Función del web service habilitada para el usuario.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SiteInfoFunction {
     pub name: String,
     pub version: Option<String>,
 }
 
 /// Datos del sitio y del usuario devueltos por `core_webservice_get_site_info`.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SiteInfo {
     pub sitename: Option<String>,
     pub username: Option<String>,
