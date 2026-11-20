@@ -84,14 +84,14 @@ async fn main() -> anyhow::Result<()> {
                 fullname: login_info.fullname,
             };
 
-            store.save(&creds)?;
+            store.save(&creds).await?;
             println!(
                 "Sesión iniciada como {} (id {}) en {}",
                 creds.fullname, creds.userid, creds.base_url
             );
         }
         Some(Commands::Logout) => {
-            store.delete(&config.base_url)?;
+            store.delete(&config.base_url).await?;
             println!("Sesión cerrada para {}.", config.base_url);
             println!(
                 "Aviso: el token sigue siendo válido en Moodle hasta que expire o se revoque desde el perfil (Preferencias -> Claves de seguridad)."

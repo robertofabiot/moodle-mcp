@@ -532,7 +532,7 @@ async fn test_resolve_credentials_moodle_token_priority_over_store() {
         username: "stored_cif".into(),
         fullname: "Usuario Archivo".into(),
     };
-    store.save(&file_creds).unwrap();
+    store.save(&file_creds).await.unwrap();
 
     let client = MoodleClient::from_builder(
         MoodleClientBuilder::new()
