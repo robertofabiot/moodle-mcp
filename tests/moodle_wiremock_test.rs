@@ -569,3 +569,72 @@ async fn test_resolve_credentials_moodle_token_priority_over_store() {
 
     std::env::remove_var("MOODLE_TOKEN");
 }
+
+#[tokio::test]
+async fn test_with_max_retries_zero_performs_single_request() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let normal_client = MoodleClient::from_builder(
+        MoodleClientBuilder::new()
+            .base_url(server.uri())
+            .gate(MoodleGate::new(4, 3).without_jitter())
+            .max_retries(2),
+    );
+
+    let no_retry_client = normal_client.with_max_retries(0);
+
+    let res = no_retry_client
+        .get_site_info("tok", Priority::Interactive)
+        .await;
+    assert!(matches!(res, Err(MoodleError::Maintenance)));
+}
+
+#[tokio::test]
+async fn test_call_raw_sends_flattened_parameters_and_returns_raw_json() {
+    let server = MockServer::start().await;
+
+    struct FormParamMatcher;
+    impl wiremock::Match for FormParamMatcher {
+        fn matches(&self, request: &Request) -> bool {
+            let body = String::from_utf8_lossy(&request.body);
+            body.contains("courseids%5B0%5D=5") || body.contains("courseids[0]=5")
+        }
+    }
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(FormParamMatcher)
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": 5, "fullname": "Curso de Prueba"}
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = MoodleClient::from_builder(
+        MoodleClientBuilder::new()
+            .base_url(server.uri())
+            .gate(MoodleGate::new(4, 3).without_jitter())
+            .max_retries(0),
+    );
+
+    let mut params = serde_json::Map::new();
+    params.insert("courseids".to_string(), serde_json::json!([5]));
+
+    let response = client
+        .call_raw("test_token_123", "core_course_get_courses", &params)
+        .await
+        .expect("call_raw debería retornar éxito");
+
+    assert_eq!(
+        response,
+        serde_json::json!([{"id": 5, "fullname": "Curso de Prueba"}])
+    );
+}
