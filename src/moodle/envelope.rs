@@ -7,6 +7,7 @@ struct MoodleErrorEnvelope {
     error: Option<String>,
     errorcode: Option<String>,
     message: Option<String>,
+    debuginfo: Option<String>,
 }
 
 /// Decodifica la respuesta en crudo de Moodle inspeccionando tanto la estructura JSON
@@ -41,10 +42,11 @@ pub fn decode_envelope<T: for<'de> Deserialize<'de>>(body: &str) -> Result<T> {
                     Err(MoodleError::AccessDenied(message))
                 }
                 "maintenance" => Err(MoodleError::Maintenance),
-                _ => Err(MoodleError::Protocol(format!(
-                    "Moodle exception: {} (errorcode: {})",
-                    message, errorcode
-                ))),
+                _ => Err(MoodleError::Api {
+                    errorcode: errorcode.to_string(),
+                    message,
+                    debuginfo: err_envelope.debuginfo,
+                }),
             };
         } else if let Some(_err_msg) = err_envelope.error {
             // Caso particular: token.php a veces devuelve solo "error" sin "exception"

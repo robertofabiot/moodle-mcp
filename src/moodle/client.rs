@@ -153,6 +153,19 @@ impl MoodleClient {
         }
     }
 
+    /// Crea una copia del cliente con un número configurado de reintentos máximos,
+    /// compartiendo el cliente HTTP, gate, breaker y contadores atómicos.
+    pub fn with_max_retries(&self, max_retries: usize) -> Self {
+        Self {
+            http: self.http.clone(),
+            base_url: Arc::clone(&self.base_url),
+            gate: Arc::clone(&self.gate),
+            breaker: Arc::clone(&self.breaker),
+            counters: Arc::clone(&self.counters),
+            max_retries,
+        }
+    }
+
     pub fn http(&self) -> &reqwest::Client {
         &self.http
     }
