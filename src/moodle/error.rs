@@ -30,6 +30,18 @@ pub enum MoodleError {
     /// Respuesta con formato JSON anómalo o violación del protocolo esperado.
     #[error("Error de protocolo Moodle: {0}")]
     Protocol(String),
+
+    /// Excepción del API de Moodle devuelta por el servidor con código de error y debuginfo.
+    #[error("Excepción del API de Moodle [{errorcode}]: {message}")]
+    Api {
+        errorcode: String,
+        message: String,
+        debuginfo: Option<String>,
+    },
+
+    /// Argumentos inválidos proporcionados por el usuario o cliente.
+    #[error("Argumentos inválidos: {0}")]
+    InvalidArguments(String),
 }
 
 impl MoodleError {

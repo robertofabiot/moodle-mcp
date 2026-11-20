@@ -79,3 +79,24 @@ fn test_decode_malformed_json_returns_protocol_error() {
     let res = decode_envelope::<DummyPayload>(bad_json);
     assert!(matches!(res, Err(MoodleError::Protocol(_))));
 }
+
+#[test]
+fn test_decode_api_exception_with_debuginfo() {
+    let json = r#"{"exception":"invalid_parameter_exception","errorcode":"invalidparameter","message":"Detectado valor de parámetro no válido","debuginfo":"Missing required key in courseids: 0"}"#;
+    let res = decode_envelope::<DummyPayload>(json);
+    match res {
+        Err(MoodleError::Api {
+            errorcode,
+            message,
+            debuginfo,
+        }) => {
+            assert_eq!(errorcode, "invalidparameter");
+            assert!(message.contains("Detectado valor de parámetro no válido"));
+            assert_eq!(
+                debuginfo.as_deref(),
+                Some("Missing required key in courseids: 0")
+            );
+        }
+        other => panic!("Esperaba MoodleError::Api, obtuve: {:?}", other),
+    }
+}
