@@ -6,16 +6,36 @@ use serde::Deserialize;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Información resultante de una autenticación exitosa en Moodle.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LoginInfo {
     pub token: String,
+    pub private_token: Option<String>,
     pub userid: i64,
     pub fullname: String,
+}
+
+impl std::fmt::Debug for LoginInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginInfo")
+            .field("token", &"<redactado>")
+            .field("private_token", &"<redactado>")
+            .field("userid", &self.userid)
+            .field("fullname", &self.fullname)
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
 struct TokenResponse {
     token: Option<String>,
+    privatetoken: Option<String>,
+}
+
+/// Función del web service habilitada para el usuario.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct SiteInfoFunction {
+    pub name: String,
+    pub version: Option<String>,
 }
 
 /// Datos del sitio y del usuario devueltos por `core_webservice_get_site_info`.
@@ -27,6 +47,8 @@ pub struct SiteInfo {
     pub lastname: Option<String>,
     pub fullname: String,
     pub userid: i64,
+    pub release: Option<String>,
+    pub functions: Option<Vec<SiteInfoFunction>>,
 }
 
 // Estructura para POST a token.php.
@@ -94,6 +116,7 @@ impl MoodleClient {
         let wstoken = token_res.token.ok_or_else(|| {
             MoodleError::Protocol("Respuesta de token.php no contiene token".into())
         })?;
+        let private_token = token_res.privatetoken;
 
         // 2da llamada: obtener site_info para extraer userid y fullname.
         // El permiso previo ya fue liberado para evitar deadlock con concurrencia restringida.
@@ -114,6 +137,7 @@ impl MoodleClient {
 
         Ok(LoginInfo {
             token: wstoken,
+            private_token,
             userid: site_info.userid,
             fullname: site_info.fullname,
         })
