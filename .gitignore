@@ -1,0 +1,20 @@
+# Documentación y plan
+docs/
+docs
+
+# Artefactos de compilación Rust
+target/
+
+# Secretos y variables de entorno
+.env
+.env.*
+!.env.example
+
+# Descargas locales del MCP
+downloads/
+
+# Logs
+*.log
+
+# capturas crudas de UAM, solo locales; anonimizar antes de mover a tests/fixtures
+tests/fixtures_raw/
