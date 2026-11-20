@@ -3,7 +3,9 @@ mod common;
 use common::{start_server, start_server_with_options};
 use moodle_mcp::config::Config;
 use moodle_mcp::mcp::output::{ToolErrorEnvelope, TruncatedResponse};
+use moodle_mcp::mcp::AppContext;
 use rmcp::model::CallToolRequestParams;
+use rmcp::ServiceExt;
 use serde_json::Value;
 use std::collections::HashMap;
 use tempfile::tempdir;
@@ -367,7 +369,7 @@ async fn test_no_session_returns_no_session_error() {
         assert_eq!(env.error.kind, "no_session");
         assert_eq!(
             env.error.hint.as_deref(),
-            Some("Ejecuta 'moodle-mcp login' en una terminal")
+            Some("Ejecuta 'moodle-mcp login' en una terminal; no hace falta reiniciar el servidor")
         );
     }
 }
@@ -480,4 +482,253 @@ async fn test_describe_function_output() {
     assert_eq!(val["read_only"], true);
     assert!(val["signature"].is_null());
     assert!(val["hint"].is_string());
+}
+
+#[tokio::test]
+async fn test_server_starts_without_session_and_reloads_after_login_without_restart() {
+    let mock = MockServer::start().await;
+    mock_site_info(&mock).await;
+
+    let tctx = common::TestContext::with_options(&mock, None, None).await;
+
+    // 1. Llamada inicial sin sesión retorna error no_session
+    let params = CallToolRequestParams::new("moodle_whoami");
+    let result = tctx
+        .client
+        .call_tool(params.clone())
+        .await
+        .expect("call_tool");
+    assert_eq!(result.is_error, Some(true));
+    let text = result.content[0].as_text().unwrap();
+    let env: ToolErrorEnvelope = serde_json::from_str(&text.text).unwrap();
+    assert_eq!(env.error.kind, "no_session");
+
+    // 2. Simular login guardando credenciales en el archivo del almacén
+    let creds = moodle_mcp::credentials::Credentials {
+        base_url: mock.uri(),
+        token: "tok_after_login".to_string(),
+        private_token: None,
+        userid: 10001,
+        username: "user_login".to_string(),
+        fullname: "ESTUDIANTE PRUEBA".to_string(),
+    };
+    tctx.store.save(&creds).await.expect("save credentials");
+
+    // 3. Siguiente llamada tiene éxito sin reiniciar el servidor
+    let result2 = tctx.client.call_tool(params).await.expect("call_tool");
+    assert!(!result2.is_error.unwrap_or(false));
+    let text2 = result2.content[0].as_text().unwrap();
+    let val: Value = serde_json::from_str(&text2.text).unwrap();
+    assert_eq!(val["userid"], 10001);
+}
+
+#[tokio::test]
+async fn test_invalid_token_invalidates_session_and_reloads_on_next_call() {
+    let mock = MockServer::start().await;
+
+    // Mock que rechaza tok_bad con invalidtoken
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(wiremock::matchers::body_string_contains("wstoken=tok_bad"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "exception": "moodle_exception",
+            "errorcode": "invalidtoken",
+            "message": "Token no válido"
+        })))
+        .mount(&mock)
+        .await;
+
+    // Mock que acepta tok_renewed con 200 OK
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(wiremock::matchers::body_string_contains(
+            "wstoken=tok_renewed",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_SITE_INFO))
+        .mount(&mock)
+        .await;
+
+    let tctx = common::TestContext::with_options(&mock, Some("tok_bad"), None).await;
+
+    // 1. Llamada falla con invalid_token e invalida la sesión
+    let params = CallToolRequestParams::new("moodle_whoami");
+    let result = tctx
+        .client
+        .call_tool(params.clone())
+        .await
+        .expect("call_tool");
+    assert_eq!(result.is_error, Some(true));
+    let text = result.content[0].as_text().unwrap();
+    let env: ToolErrorEnvelope = serde_json::from_str(&text.text).unwrap();
+    assert_eq!(env.error.kind, "invalid_token");
+
+    // 2. Simular login guardando nuevo token en almacén
+    let creds = moodle_mcp::credentials::Credentials {
+        base_url: mock.uri(),
+        token: "tok_renewed".to_string(),
+        private_token: None,
+        userid: 10001,
+        username: "user_login".to_string(),
+        fullname: "ESTUDIANTE PRUEBA".to_string(),
+    };
+    tctx.store.save(&creds).await.expect("save credentials");
+
+    // 3. Siguiente llamada carga el nuevo token y tiene éxito
+    let result2 = tctx.client.call_tool(params).await.expect("call_tool");
+    assert!(!result2.is_error.unwrap_or(false));
+    let text2 = result2.content[0].as_text().unwrap();
+    let val: Value = serde_json::from_str(&text2.text).unwrap();
+    assert_eq!(val["userid"], 10001);
+}
+
+#[tokio::test]
+async fn test_whoami_twice_generates_two_http_requests() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(wiremock::matchers::body_string_contains(
+            "wsfunction=core_webservice_get_site_info",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_SITE_INFO))
+        .expect(2)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let params1 = CallToolRequestParams::new("moodle_whoami");
+    let r1 = client.call_tool(params1).await.expect("moodle_whoami 1");
+    assert!(!r1.is_error.unwrap_or(false));
+
+    let params2 = CallToolRequestParams::new("moodle_whoami");
+    let r2 = client.call_tool(params2).await.expect("moodle_whoami 2");
+    assert!(!r2.is_error.unwrap_or(false));
+}
+
+#[tokio::test]
+async fn test_corrupt_file_store_returns_io_error_and_server_stays_alive() {
+    let mock = MockServer::start().await;
+    mock_site_info(&mock).await;
+
+    let tctx = common::TestContext::with_options(&mock, None, None).await;
+
+    // Escribir contenido corrupto (no JSON) en el archivo de credenciales
+    std::fs::write(&tctx.store_file, "INVALID_CORRUPTED_JSON_CONTENT{{{")
+        .expect("write corrupt file");
+
+    let params = CallToolRequestParams::new("moodle_whoami");
+    let result = tctx
+        .client
+        .call_tool(params.clone())
+        .await
+        .expect("call_tool");
+    assert_eq!(result.is_error, Some(true));
+    let text = result.content[0].as_text().unwrap();
+    let env: ToolErrorEnvelope = serde_json::from_str(&text.text).unwrap();
+    assert_eq!(env.error.kind, "io", "Debe retornar error tipado io");
+
+    // Reparar el archivo con credenciales válidas; el servidor sigue vivo y responde
+    let creds = moodle_mcp::credentials::Credentials {
+        base_url: mock.uri(),
+        token: "tok123".to_string(),
+        private_token: None,
+        userid: 10001,
+        username: "user".to_string(),
+        fullname: "ESTUDIANTE PRUEBA".to_string(),
+    };
+    tctx.store.save(&creds).await.expect("save credentials");
+
+    let result2 = tctx.client.call_tool(params).await.expect("call_tool");
+    assert!(!result2.is_error.unwrap_or(false));
+}
+
+#[tokio::test]
+async fn test_truncation_with_tokens_scrubs_both_preview_and_saved_file() {
+    let mock = MockServer::start().await;
+    mock_site_info(&mock).await;
+
+    let secret_tok = "tok_super_secret_12345";
+    let secret_priv = "priv_super_secret_67890";
+
+    let leaky_large_response = serde_json::json!({
+        "status": "ok",
+        "auth_token": secret_tok,
+        "private_token": secret_priv,
+        "items": vec![format!("item_data_{secret_tok}_{secret_priv}"); 20]
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(wiremock::matchers::body_string_contains(
+            "wsfunction=core_enrol_get_users_courses",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(leaky_large_response))
+        .mount(&mock)
+        .await;
+
+    let dir = tempdir().unwrap();
+    let config = Config {
+        base_url: mock.uri(),
+        download_dir: dir.path().to_path_buf(),
+        max_response_bytes: 80,
+        max_inline_image_bytes: 1_000_000,
+    };
+
+    let creds = moodle_mcp::credentials::Credentials {
+        base_url: mock.uri(),
+        token: secret_tok.to_string(),
+        private_token: Some(secret_priv.to_string()),
+        userid: 10001,
+        username: "test_user".to_string(),
+        fullname: "ESTUDIANTE PRUEBA".to_string(),
+    };
+
+    let store_file = dir.path().join("creds.json");
+    let store = moodle_mcp::credentials::CredentialStore::with_file(store_file);
+    store.save(&creds).await.unwrap();
+
+    let gate = moodle_mcp::moodle::gate::MoodleGate::new(4, 3).without_jitter();
+    let client = moodle_mcp::moodle::client::MoodleClient::from_builder(
+        moodle_mcp::moodle::client::MoodleClientBuilder::new()
+            .base_url(mock.uri())
+            .gate(gate),
+    );
+
+    let ctx = std::sync::Arc::new(AppContext::new(config, client, store));
+    let server = moodle_mcp::mcp::MoodleMcp::new(ctx);
+
+    let (client_io, server_io) = tokio::io::duplex(1 << 16);
+    tokio::spawn(async move {
+        if let Ok(running) = server.serve(server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+
+    let mcp_client = ().serve(client_io).await.unwrap();
+
+    let args = serde_json::json!({
+        "function": "core_enrol_get_users_courses"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    let params = CallToolRequestParams::new("moodle_call").with_arguments(args);
+    let result = mcp_client.call_tool(params).await.expect("call_tool");
+
+    assert!(!result.is_error.unwrap_or(false));
+    let text = &result.content[0].as_text().unwrap().text;
+    let truncated: TruncatedResponse = serde_json::from_str(text).unwrap();
+    assert!(truncated.truncated);
+
+    // Ni el preview ni el archivo guardado deben contener ninguno de los secretos
+    assert!(!truncated.preview.contains(secret_tok));
+    assert!(!truncated.preview.contains(secret_priv));
+    assert!(truncated.preview.contains("<token>"));
+
+    let saved_content = std::fs::read_to_string(&truncated.saved_to).unwrap();
+    assert!(!saved_content.contains(secret_tok));
+    assert!(!saved_content.contains(secret_priv));
+    assert!(saved_content.contains("<token>"));
 }

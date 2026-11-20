@@ -532,7 +532,7 @@ async fn test_resolve_credentials_moodle_token_priority_over_store() {
         username: "stored_cif".into(),
         fullname: "Usuario Archivo".into(),
     };
-    store.save(&file_creds).unwrap();
+    store.save(&file_creds).await.unwrap();
 
     let client = MoodleClient::from_builder(
         MoodleClientBuilder::new()
@@ -593,6 +593,28 @@ async fn test_with_max_retries_zero_performs_single_request() {
     let res = no_retry_client
         .get_site_info("tok", Priority::Interactive)
         .await;
+    assert!(matches!(res, Err(MoodleError::Maintenance)));
+}
+
+#[tokio::test]
+async fn test_normal_client_with_max_retries_two_performs_three_requests_on_503() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let client = MoodleClient::from_builder(
+        MoodleClientBuilder::new()
+            .base_url(server.uri())
+            .gate(MoodleGate::new(4, 3).without_jitter())
+            .max_retries(2),
+    );
+
+    let res = client.get_site_info("tok", Priority::Interactive).await;
     assert!(matches!(res, Err(MoodleError::Maintenance)));
 }
 

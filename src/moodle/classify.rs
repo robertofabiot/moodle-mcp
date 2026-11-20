@@ -15,6 +15,7 @@ const WRITE_INFIXES: &[&str] = &[
     "_send_",
     "_start_",
     "_process_",
+    "_view_",
 ];
 
 const READ_ONLY_INFIXES: &[&str] = &["_get_", "_search_", "_check_", "_is_", "_can_"];
@@ -60,6 +61,7 @@ mod tests {
         assert!(!is_read_only("core_course_view_course"));
         assert!(!is_read_only("mod_page_view_page"));
         assert!(!is_read_only("mod_forum_view_forum"));
+        assert!(!is_read_only("core_search_view_results"));
     }
 
     #[test]

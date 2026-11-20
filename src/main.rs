@@ -84,14 +84,14 @@ async fn main() -> anyhow::Result<()> {
                 fullname: login_info.fullname,
             };
 
-            store.save(&creds)?;
+            store.save(&creds).await?;
             println!(
                 "Sesión iniciada como {} (id {}) en {}",
                 creds.fullname, creds.userid, creds.base_url
             );
         }
         Some(Commands::Logout) => {
-            store.delete(&config.base_url)?;
+            store.delete(&config.base_url).await?;
             println!("Sesión cerrada para {}.", config.base_url);
             println!(
                 "Aviso: el token sigue siendo válido en Moodle hasta que expire o se revoque desde el perfil (Preferencias -> Claves de seguridad)."
@@ -102,11 +102,14 @@ async fn main() -> anyhow::Result<()> {
                 MoodleClientBuilder::new().base_url(config.base_url.clone()),
             );
 
-            let creds = resolve_credentials(&config, &store, &client).await?;
-            let creds = match creds {
-                Some(c) => c,
-                None => {
-                    eprintln!("Error: no hay sesión activa. Ejecuta 'moodle-mcp login' primero.");
+            let creds = match resolve_credentials(&config, &store, &client).await {
+                Ok(Some(c)) => c,
+                Ok(None) => {
+                    eprintln!("No hay sesión activa. Ejecuta 'moodle-mcp login' primero.");
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("Error al verificar sesión: {e}");
                     std::process::exit(1);
                 }
             };
@@ -141,12 +144,7 @@ async fn main() -> anyhow::Result<()> {
                 MoodleClientBuilder::new().base_url(config.base_url.clone()),
             );
 
-            let creds = resolve_credentials(&config, &store, &client)
-                .await
-                .ok()
-                .flatten();
-
-            let ctx = Arc::new(AppContext::new(config, creds, client));
+            let ctx = Arc::new(AppContext::new(config, client, store));
             let server = MoodleMcp::new(ctx);
             server
                 .serve(rmcp::transport::io::stdio())

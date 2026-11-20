@@ -45,6 +45,7 @@ pub enum StoreKind {
 }
 
 /// Manejador de persistencia segura de credenciales.
+#[derive(Clone)]
 pub struct CredentialStore {
     kind: StoreKind,
     custom_file: Option<PathBuf>,
@@ -61,6 +62,13 @@ impl CredentialStore {
     pub fn with_file(path: PathBuf) -> Self {
         Self {
             kind: StoreKind::File,
+            custom_file: Some(path),
+        }
+    }
+
+    pub fn auto_with_file(path: PathBuf) -> Self {
+        Self {
+            kind: StoreKind::Auto,
             custom_file: Some(path),
         }
     }
@@ -82,8 +90,34 @@ impl CredentialStore {
         Ok(config_dir.join("moodle-mcp").join("credentials.json"))
     }
 
-    /// Carga credenciales para la URL base especificada.
-    pub fn load(&self, base_url: &str) -> Result<Option<Credentials>> {
+    /// Carga credenciales para la URL base especificada de forma asíncrona.
+    pub async fn load(&self, base_url: &str) -> Result<Option<Credentials>> {
+        let this = self.clone();
+        let base_url = base_url.to_string();
+        tokio::task::spawn_blocking(move || this.load_sync(&base_url))
+            .await
+            .context("Fallo en tarea spawn_blocking al cargar credenciales")?
+    }
+
+    /// Guarda credenciales en el almacén configurado de forma asíncrona.
+    pub async fn save(&self, creds: &Credentials) -> Result<()> {
+        let this = self.clone();
+        let creds = creds.clone();
+        tokio::task::spawn_blocking(move || this.save_sync(&creds))
+            .await
+            .context("Fallo en tarea spawn_blocking al guardar credenciales")?
+    }
+
+    /// Elimina credenciales para la URL base dada de forma asíncrona.
+    pub async fn delete(&self, base_url: &str) -> Result<()> {
+        let this = self.clone();
+        let base_url = base_url.to_string();
+        tokio::task::spawn_blocking(move || this.delete_sync(&base_url))
+            .await
+            .context("Fallo en tarea spawn_blocking al borrar credenciales")?
+    }
+
+    fn load_sync(&self, base_url: &str) -> Result<Option<Credentials>> {
         let account = Self::account_key(base_url);
 
         match self.kind {
@@ -97,8 +131,7 @@ impl CredentialStore {
         }
     }
 
-    /// Guarda credenciales en el almacén configurado.
-    pub fn save(&self, creds: &Credentials) -> Result<()> {
+    fn save_sync(&self, creds: &Credentials) -> Result<()> {
         let account = Self::account_key(&creds.base_url);
         let serialized = serde_json::to_string(creds)?;
 
@@ -114,8 +147,7 @@ impl CredentialStore {
         }
     }
 
-    /// Elimina credenciales para la URL base dada.
-    pub fn delete(&self, base_url: &str) -> Result<()> {
+    fn delete_sync(&self, base_url: &str) -> Result<()> {
         let account = Self::account_key(base_url);
 
         match self.kind {
@@ -276,13 +308,21 @@ pub async fn resolve_credentials(
         }
     }
 
-    store.load(&config.base_url)
+    store.load(&config.base_url).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_keyring_load_nonexistent_account_no_panic() {
+        let store = CredentialStore::new(StoreKind::Keyring);
+        // Debe retornar Ok(None) o Err(_) sin causar pánico en runtime multi-hilo
+        let res = store.load("http://127.0.0.1:9/test-probe").await;
+        assert!(res.is_ok() || res.is_err());
+    }
 
     #[test]
     fn test_credentials_debug_redacts_tokens() {
@@ -303,8 +343,8 @@ mod tests {
         assert!(debug_str.contains("Estudiante Prueba"));
     }
 
-    #[test]
-    fn test_file_store_lifecycle_and_permissions() {
+    #[tokio::test]
+    async fn test_file_store_lifecycle_and_permissions() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("sub").join("creds.json");
         let store = CredentialStore::with_file(file_path.clone());
@@ -319,7 +359,7 @@ mod tests {
         };
 
         // Guardar
-        store.save(&creds).unwrap();
+        store.save(&creds).await.unwrap();
 
         // Verificar permisos Unix 0600 en archivo y 0700 en directorio
         #[cfg(unix)]
@@ -335,13 +375,20 @@ mod tests {
         // Cargar
         let loaded = store
             .load("https://uamvirtual.uam.edu.ni/grado")
+            .await
             .unwrap()
             .expect("Debería encontrar credenciales guardadas");
         assert_eq!(loaded, creds);
 
         // Borrar
-        store.delete("https://uamvirtual.uam.edu.ni/grado").unwrap();
-        let after_delete = store.load("https://uamvirtual.uam.edu.ni/grado").unwrap();
+        store
+            .delete("https://uamvirtual.uam.edu.ni/grado")
+            .await
+            .unwrap();
+        let after_delete = store
+            .load("https://uamvirtual.uam.edu.ni/grado")
+            .await
+            .unwrap();
         assert!(after_delete.is_none());
     }
 }

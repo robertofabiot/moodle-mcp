@@ -50,7 +50,10 @@ impl CircuitBreaker {
 
     /// Retorna el estado actual del breaker, transicionando a HalfOpen si el cooldown ya expiró.
     pub fn state(&self) -> CircuitState {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if inner.state == CircuitState::Down {
             if let Some(tripped) = inner.last_trip_time {
                 if tripped.elapsed() >= self.cooldown {
@@ -70,7 +73,10 @@ impl CircuitBreaker {
     /// Retorna `true` si ocurrió una transición observable de `Down/HalfOpen` hacia `Up`.
     pub fn record_success(&self) -> bool {
         self.failures.store(0, Ordering::SeqCst);
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let was_down = inner.state != CircuitState::Up;
         if was_down {
             inner.state = CircuitState::Up;
@@ -84,7 +90,10 @@ impl CircuitBreaker {
     /// Retorna `true` si este fallo provocó la apertura del circuito (transición observable `Up -> Down`).
     pub fn record_failure(&self) -> bool {
         let count = self.failures.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if count >= self.failure_threshold && inner.state != CircuitState::Down {
             inner.state = CircuitState::Down;
             inner.last_trip_time = Some(Instant::now());
@@ -100,7 +109,10 @@ impl CircuitBreaker {
 
     /// Fuerza la apertura o cierre manual (útil para pruebas unitarias).
     pub fn force_state(&self, state: CircuitState) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.state = state;
         if state == CircuitState::Down {
             inner.last_trip_time = Some(Instant::now());
