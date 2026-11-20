@@ -41,7 +41,15 @@ pub async fn start_server_with_options(
     let client =
         MoodleClient::from_builder(MoodleClientBuilder::new().base_url(base_url).gate(gate));
 
-    let ctx = Arc::new(AppContext::new(config, credentials, client));
+    let store = moodle_mcp::credentials::CredentialStore::new(
+        moodle_mcp::credentials::StoreKind::Auto,
+    );
+    let ctx = Arc::new(AppContext::new_with_session(
+        config,
+        client,
+        store,
+        credentials,
+    ));
     let server = MoodleMcp::new(ctx);
 
     let (client_io, server_io) = tokio::io::duplex(1 << 16);

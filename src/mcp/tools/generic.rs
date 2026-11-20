@@ -1,11 +1,14 @@
 use crate::mcp::server::MoodleMcp;
 use crate::moodle::classify::is_read_only;
+use crate::moodle::error::MoodleError;
+use crate::moodle::gate::Priority;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListFunctionsParams {
@@ -69,12 +72,26 @@ impl MoodleMcp {
         annotations(read_only_hint = true)
     )]
     pub async fn moodle_whoami(&self) -> CallToolResult {
-        if self.ctx.credentials.is_none() {
-            return self.ctx.no_session_error();
-        }
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
 
-        let site_info = match self.ctx.get_site_info().await {
-            Ok(info) => info,
+        let site_info = match self
+            .ctx
+            .client
+            .get_site_info(&creds.token, Priority::Interactive)
+            .await
+        {
+            Ok(info) => {
+                let arc_info = Arc::new(info);
+                *self.ctx.site_info.write().await = Some(Arc::clone(&arc_info));
+                arc_info
+            }
+            Err(MoodleError::InvalidToken) => {
+                self.ctx.invalidate_session().await;
+                return self.ctx.invalid_token_error().await;
+            }
             Err(e) => return self.ctx.tool_error_from_moodle(&e),
         };
 
@@ -103,13 +120,9 @@ impl MoodleMcp {
         &self,
         params: Parameters<ListFunctionsParams>,
     ) -> CallToolResult {
-        if self.ctx.credentials.is_none() {
-            return self.ctx.no_session_error();
-        }
-
         let functions = match self.ctx.get_enabled_functions().await {
             Ok(f) => f,
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(err) => return err,
         };
 
         let filter_str = params.0.filter.as_deref().unwrap_or("").to_lowercase();
@@ -141,14 +154,10 @@ impl MoodleMcp {
         &self,
         params: Parameters<DescribeFunctionParams>,
     ) -> CallToolResult {
-        if self.ctx.credentials.is_none() {
-            return self.ctx.no_session_error();
-        }
-
         let name = params.0.name.trim();
         let enabled = match self.ctx.is_function_enabled(name).await {
             Ok(e) => e,
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(err) => return err,
         };
 
         let read_only = is_read_only(name);
@@ -170,10 +179,10 @@ impl MoodleMcp {
         annotations(read_only_hint = true, open_world_hint = true)
     )]
     pub async fn moodle_read(&self, params: Parameters<GenericCallParams>) -> CallToolResult {
-        if self.ctx.credentials.is_none() {
-            return self.ctx.no_session_error();
-        }
-        let creds = self.ctx.credentials.as_ref().unwrap();
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
 
         let function = params.0.function.trim();
 
@@ -189,7 +198,7 @@ impl MoodleMcp {
                     None,
                 );
             }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(err) => return err,
         }
 
         // 2. Verificar que sea de solo lectura
@@ -213,6 +222,10 @@ impl MoodleMcp {
             .await
         {
             Ok(data) => self.ctx.ok_json(&data, function),
+            Err(MoodleError::InvalidToken) => {
+                self.ctx.invalidate_session().await;
+                self.ctx.invalid_token_error().await
+            }
             Err(e) => self.ctx.tool_error_from_moodle(&e),
         }
     }
@@ -224,10 +237,10 @@ impl MoodleMcp {
         annotations(destructive_hint = true, open_world_hint = true)
     )]
     pub async fn moodle_call(&self, params: Parameters<GenericCallParams>) -> CallToolResult {
-        if self.ctx.credentials.is_none() {
-            return self.ctx.no_session_error();
-        }
-        let creds = self.ctx.credentials.as_ref().unwrap();
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
 
         let function = params.0.function.trim();
 
@@ -243,7 +256,7 @@ impl MoodleMcp {
                     None,
                 );
             }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(err) => return err,
         }
 
         // 2. Seleccionar client: write_client (0 reintentos) para escrituras, client normal para lecturas
@@ -258,6 +271,10 @@ impl MoodleMcp {
         let call_params = params.0.params.as_ref().unwrap_or(&empty_params);
         match client.call_raw(&creds.token, function, call_params).await {
             Ok(data) => self.ctx.ok_json(&data, function),
+            Err(MoodleError::InvalidToken) => {
+                self.ctx.invalidate_session().await;
+                self.ctx.invalid_token_error().await
+            }
             Err(e) => self.ctx.tool_error_from_moodle(&e),
         }
     }
