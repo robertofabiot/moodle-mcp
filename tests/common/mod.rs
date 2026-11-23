@@ -59,7 +59,10 @@ impl TestContext {
         let client =
             MoodleClient::from_builder(MoodleClientBuilder::new().base_url(base_url).gate(gate));
 
-        let ctx = Arc::new(AppContext::new(config.clone(), client, store.clone()));
+        let ctx = Arc::new(
+            AppContext::new(config.clone(), client, store.clone())
+                .with_env_token_reader(Arc::new(|| (None, None))),
+        );
         let server = MoodleMcp::new(ctx);
 
         let (client_io, server_io) = tokio::io::duplex(1 << 16);
@@ -99,8 +102,7 @@ pub async fn start_server_with_options(
     let base_url = mock.uri();
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let download_dir = temp_dir.path().join("downloads");
-    // Filtrar caída prematura del directorio temporal en pruebas
-    let _ = Box::leak(Box::new(temp_dir));
+    let store_file = temp_dir.path().join("credentials.json");
 
     let config = custom_config.unwrap_or_else(|| Config {
         base_url: base_url.clone(),
@@ -122,18 +124,16 @@ pub async fn start_server_with_options(
     let client =
         MoodleClient::from_builder(MoodleClientBuilder::new().base_url(base_url).gate(gate));
 
-    let store =
-        moodle_mcp::credentials::CredentialStore::new(moodle_mcp::credentials::StoreKind::Auto);
-    let ctx = Arc::new(AppContext::new_with_session(
-        config,
-        client,
-        store,
-        credentials,
-    ));
+    let store = CredentialStore::with_file(store_file);
+    let ctx = Arc::new(
+        AppContext::new_with_session(config, client, store, credentials)
+            .with_env_token_reader(Arc::new(|| (None, None))),
+    );
     let server = MoodleMcp::new(ctx);
 
     let (client_io, server_io) = tokio::io::duplex(1 << 16);
     tokio::spawn(async move {
+        let _keep_alive = temp_dir;
         if let Ok(running) = server.serve(server_io).await {
             let _ = running.waiting().await;
         }
