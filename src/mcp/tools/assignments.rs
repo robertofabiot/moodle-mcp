@@ -1,6 +1,7 @@
 use crate::content::{html_to_markdown, markdown_to_html, plain_text_to_html};
 use crate::mcp::server::MoodleMcp;
 use crate::moodle::error::MoodleError;
+use crate::moodle::files::authorize_file_url;
 use crate::moodle::gate::Priority;
 use crate::moodle::ids::resolve_module;
 use rmcp::handler::server::wrapper::Parameters;
@@ -119,6 +120,8 @@ pub struct AssignmentGradeInfo {
     pub grader: Option<i64>,
     pub timemodified: Option<i64>,
 }
+
+// Modelos internos para deserializar respuestas de Moodle
 
 #[derive(Deserialize)]
 struct AssignGetAssignmentsResponse {
@@ -681,6 +684,7 @@ impl MoodleMcp {
             Err(err) => return err,
         };
 
+        // 1. Validar parámetros mutuamente excluyentes y resolver módulo
         let module_ref = match resolve_module(
             &self.ctx.client,
             &creds.token,
@@ -704,6 +708,7 @@ impl MoodleMcp {
             Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
+        // 2. Validar que al menos uno de files o onlinetext esté presente y no vacío
         let new_files = params.0.files.unwrap_or_default();
         let onlinetext = params.0.onlinetext;
         let has_files = !new_files.is_empty();
@@ -737,8 +742,82 @@ impl MoodleMcp {
             }
         };
 
+        // 3. Manejo de archivos (files)
         let mut files_itemid: Option<i64> = None;
-        if has_files {
+
+        if params.0.keep_existing_files {
+            let instance_str = module_ref.instance.to_string();
+            let status_query = [
+                ("wstoken", creds.token.as_str()),
+                ("wsfunction", "mod_assign_get_submission_status"),
+                ("moodlewsrestformat", "json"),
+                ("assignid", instance_str.as_str()),
+            ];
+
+            let status_resp: SubmissionStatusResponse = match self
+                .ctx
+                .client
+                .post_webservice(&status_query, Priority::Interactive)
+                .await
+            {
+                Ok(r) => r,
+                Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+                Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+            };
+
+            let prev_status = parse_submission_status(&status_resp);
+            let prev_files = prev_status.submitted_files;
+
+            let temp_dir = match tempfile::tempdir() {
+                Ok(td) => td,
+                Err(e) => {
+                    return self.ctx.tool_error(
+                        "io",
+                        format!("Fallo al crear directorio temporal: {e}"),
+                        None,
+                        None,
+                        None,
+                        Some(&creds),
+                    );
+                }
+            };
+
+            let mut all_upload_paths = Vec::new();
+
+            for pf in &prev_files {
+                let auth_url = match authorize_file_url(&base_url, &pf.fileurl, &creds.token) {
+                    Ok(u) => u,
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+                };
+                let dl = match self
+                    .ctx
+                    .file_client
+                    .download(&auth_url, None, temp_dir.path())
+                    .await
+                {
+                    Ok(d) => d,
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+                };
+                all_upload_paths.push(dl.path);
+            }
+
+            for nf in &new_files {
+                all_upload_paths.push(PathBuf::from(nf));
+            }
+
+            if !all_upload_paths.is_empty() {
+                let upload_res = match self
+                    .ctx
+                    .file_client
+                    .upload(&base_url, &creds.token, &all_upload_paths, None)
+                    .await
+                {
+                    Ok(res) => res,
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+                };
+                files_itemid = Some(upload_res.itemid);
+            }
+        } else if has_files {
             let paths: Vec<PathBuf> = new_files.iter().map(PathBuf::from).collect();
             let upload_res = match self
                 .ctx
@@ -752,6 +831,7 @@ impl MoodleMcp {
             files_itemid = Some(upload_res.itemid);
         }
 
+        // 4. Manejo de texto en línea (onlinetext)
         let mut onlinetext_html_and_itemid: Option<(String, i64)> = None;
         if let Some(text) = onlinetext {
             if !text.trim().is_empty() {
@@ -787,6 +867,7 @@ impl MoodleMcp {
             }
         }
 
+        // 5. Guardar entrega (mod_assign_save_submission) con write_client
         let mut save_params = serde_json::Map::new();
         save_params.insert(
             "assignmentid".to_string(),
@@ -829,6 +910,70 @@ impl MoodleMcp {
                 .tool_error("api", warn_msg, None, None, None, Some(&creds));
         }
 
+        // 6. Entrega final si params.final es true y submissiondrafts == 1
+        if params.0.r#final {
+            let course_str = module_ref.course.to_string();
+            let query = [
+                ("wstoken", creds.token.as_str()),
+                ("wsfunction", "mod_assign_get_assignments"),
+                ("moodlewsrestformat", "json"),
+                ("courseids[0]", course_str.as_str()),
+            ];
+
+            let assign_resp: AssignGetAssignmentsResponse = match self
+                .ctx
+                .client
+                .post_webservice(&query, Priority::Interactive)
+                .await
+            {
+                Ok(r) => r,
+                Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+                Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+            };
+
+            let has_drafts = assign_resp
+                .courses
+                .into_iter()
+                .flat_map(|c| c.assignments)
+                .find(|a| a.id == module_ref.instance)
+                .map(|a| a.submissiondrafts.unwrap_or(0) == 1)
+                .unwrap_or(false);
+
+            if has_drafts {
+                let mut submit_params = serde_json::Map::new();
+                submit_params.insert(
+                    "assignmentid".to_string(),
+                    serde_json::json!(module_ref.instance),
+                );
+                submit_params.insert(
+                    "acceptsubmissionstatement".to_string(),
+                    serde_json::json!(1),
+                );
+
+                let submit_resp = match self
+                    .ctx
+                    .write_client
+                    .call_raw(
+                        &creds.token,
+                        "mod_assign_submit_for_grading",
+                        &submit_params,
+                    )
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+                };
+
+                if let Some(warn_msg) = extract_warnings(&submit_resp) {
+                    return self
+                        .ctx
+                        .tool_error("api", warn_msg, None, None, None, Some(&creds));
+                }
+            }
+        }
+
+        // 7. Consultar nuevamente mod_assign_get_submission_status
         let instance_str = module_ref.instance.to_string();
         let status_query = [
             ("wstoken", creds.token.as_str()),
