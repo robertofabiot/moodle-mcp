@@ -574,3 +574,84 @@ async fn test_mcp_tool_moodle_sync_course_e2e() {
         "no debe contener URLs internas desanitizadas"
     );
 }
+
+#[tokio::test]
+async fn test_moodle_sync_course_network_error_never_leaks_token() {
+    let mock = MockServer::start().await;
+    let base_url = mock.uri();
+    let secret_token = "SECRET_SYNC_TOKEN_ABC123";
+    let client = common::start_server_with_options(&mock, Some(secret_token), None).await;
+
+    let tree = json!([
+        {
+            "id": 1,
+            "section": 1,
+            "name": "Seccion Con Fallo",
+            "modules": [
+                {
+                    "id": 10,
+                    "modname": "resource",
+                    "name": "Recurso Roto",
+                    "contents": [
+                        {
+                            "type": "file",
+                            "filename": "broken.pdf",
+                            "filepath": "/",
+                            "filesize": 100,
+                            "fileurl": format!("{base_url}/pluginfile.php/1/broken.pdf"),
+                            "timemodified": 1000
+                        }
+                    ]
+                }
+            ]
+        }
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&tree))
+        .mount(&mock)
+        .await;
+
+    // El archivo falla con 500
+    Mock::given(method("GET"))
+        .and(path("/webservice/pluginfile.php/1/broken.pdf"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock)
+        .await;
+
+    let temp = tempdir().expect("tempdir");
+    let dest_path = temp
+        .path()
+        .join("curso_leak_test")
+        .to_string_lossy()
+        .into_owned();
+
+    let args = json!({
+        "courseid": 99,
+        "dest": dest_path
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    let res = client
+        .call_tool(CallToolRequestParams::new("moodle_sync_course").with_arguments(args))
+        .await
+        .expect("call moodle_sync_course");
+
+    let text = res.content[0].as_text().expect("texto").text.clone();
+    assert!(
+        !text.contains(secret_token),
+        "La respuesta MCP no debe contener el token en texto ni en failed[].error: {text}"
+    );
+
+    let val: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let failed = val["failed"].as_array().expect("failed array");
+    assert_eq!(failed.len(), 1);
+    let failed_err = failed[0]["error"].as_str().expect("error string");
+    assert!(
+        !failed_err.contains(secret_token),
+        "failed[].error no debe contener el token: {failed_err}"
+    );
+}

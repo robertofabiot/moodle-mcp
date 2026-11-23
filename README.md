@@ -122,6 +122,6 @@ Puedes personalizar el comportamiento de `moodle-mcp` mediante variables de ento
 
 - `MOODLE_BASE_URL`: URL base de la instancia de Moodle (por defecto `https://uamvirtual.uam.edu.ni/grado`).
 - `MOODLE_TOKEN`: Token de autenticación directo (omite la lectura del keyring o archivo).
-- `MOODLE_PRIVATE_TOKEN`: Token privado (`privatetoken`) devuelto en el inicio de sesión de Moodle para autologin en el navegador y descarga autorizada de archivos.
+- `MOODLE_PRIVATE_TOKEN`: Token privado (`privatetoken`) devuelto en el inicio de sesión de Moodle, utilizado exclusivamente para generar claves de inicio de sesión automático en el navegador.
 - `MOODLE_MCP_DOWNLOAD_DIR`: Directorio base para descargas y respuestas truncadas (por defecto `~/Downloads/moodle-mcp`).
 - `MOODLE_MCP_MAX_RESPONSE_BYTES`: Tamaño máximo en bytes de una respuesta antes de truncarla y guardarla en archivo (por defecto `60000`).

@@ -582,6 +582,73 @@ async fn test_invalid_token_invalidates_session_and_reloads_on_next_call() {
 }
 
 #[tokio::test]
+async fn test_invalid_token_with_env_session_source_returns_env_hint() {
+    let mock = MockServer::start().await;
+
+    // Mock que responde invalidtoken
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "exception": "moodle_exception",
+            "errorcode": "invalidtoken",
+            "message": "Token no válido"
+        })))
+        .mount(&mock)
+        .await;
+
+    let base_url = mock.uri();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let download_dir = temp_dir.path().join("downloads");
+    let store_file = temp_dir.path().join("credentials.json");
+    let store = moodle_mcp::credentials::CredentialStore::with_file(store_file);
+
+    let config = moodle_mcp::config::Config {
+        base_url: base_url.clone(),
+        download_dir,
+        max_response_bytes: 60_000,
+        max_inline_image_bytes: 1_000_000,
+    };
+
+    let gate = moodle_mcp::moodle::gate::MoodleGate::new(4, 3).without_jitter();
+    let client = moodle_mcp::moodle::client::MoodleClient::from_builder(
+        moodle_mcp::moodle::client::MoodleClientBuilder::new()
+            .base_url(base_url)
+            .gate(gate),
+    );
+
+    // Inyectar env_token_reader que suministra token de entorno
+    let ctx = std::sync::Arc::new(
+        moodle_mcp::mcp::AppContext::new(config, client, store).with_env_token_reader(
+            std::sync::Arc::new(|| (Some("env_token_bad".to_string()), None)),
+        ),
+    );
+    let server = moodle_mcp::mcp::MoodleMcp::new(ctx);
+
+    let (client_io, server_io) = tokio::io::duplex(1 << 16);
+    tokio::spawn(async move {
+        let _keep_alive = temp_dir;
+        if let Ok(running) = server.serve(server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+
+    use rmcp::ServiceExt;
+    let client = ().serve(client_io).await.expect("Fallo al conectar cliente duplex a MoodleMcp");
+
+    let params = CallToolRequestParams::new("moodle_whoami");
+    let result = client.call_tool(params).await.expect("call_tool");
+    assert_eq!(result.is_error, Some(true));
+
+    let text = result.content[0].as_text().unwrap();
+    let env: ToolErrorEnvelope = serde_json::from_str(&text.text).unwrap();
+    assert_eq!(env.error.kind, "invalid_token");
+    assert_eq!(
+        env.error.hint.as_deref(),
+        Some("Actualiza la variable de entorno MOODLE_TOKEN y reinicia el cliente MCP")
+    );
+}
+
+#[tokio::test]
 async fn test_whoami_twice_generates_two_http_requests() {
     let mock = MockServer::start().await;
 

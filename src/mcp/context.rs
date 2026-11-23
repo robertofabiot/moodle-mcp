@@ -16,6 +16,9 @@ pub enum SessionSource {
     Store,
 }
 
+/// Lector opcional de tokens del entorno para aislar tests de variables reales.
+pub type EnvTokenReader = Arc<dyn Fn() -> (Option<String>, Option<String>) + Send + Sync>;
+
 /// Contexto global compartido del servidor MCP.
 pub struct AppContext {
     /// Configuración operativa del servidor.
@@ -34,6 +37,8 @@ pub struct AppContext {
     pub site_info: RwLock<Option<Arc<SiteInfo>>>,
     /// Procedencia de la sesión actual (variables de entorno o almacén).
     pub session_source: RwLock<Option<SessionSource>>,
+    /// Lector inyectado de variables de entorno (si existe).
+    pub env_token_reader: Option<EnvTokenReader>,
 }
 
 impl AppContext {
@@ -51,6 +56,7 @@ impl AppContext {
             session: RwLock::new(None),
             site_info: RwLock::new(None),
             session_source: RwLock::new(None),
+            env_token_reader: None,
         }
     }
 
@@ -77,7 +83,14 @@ impl AppContext {
             } else {
                 None
             }),
+            env_token_reader: None,
         }
+    }
+
+    /// Permite inyectar un lector personalizado de tokens de entorno para aislamiento en pruebas.
+    pub fn with_env_token_reader(mut self, reader: EnvTokenReader) -> Self {
+        self.env_token_reader = Some(reader);
+        self
     }
 
     /// Resuelve las credenciales activas bajo demanda respetando el orden de precedencia:
@@ -95,12 +108,20 @@ impl AppContext {
             }
         }
 
-        // 2. Comprobar si hay token en variable de entorno
-        if let Ok(token) = std::env::var("MOODLE_TOKEN") {
+        // 2. Comprobar si hay token en variable de entorno (o lector inyectado)
+        let env_tokens = if let Some(ref reader) = self.env_token_reader {
+            reader()
+        } else {
+            (
+                std::env::var("MOODLE_TOKEN").ok(),
+                std::env::var("MOODLE_PRIVATE_TOKEN").ok(),
+            )
+        };
+
+        if let (Some(token), opt_priv) = env_tokens {
             let token = token.trim().to_string();
             if !token.is_empty() {
-                let private_token = std::env::var("MOODLE_PRIVATE_TOKEN")
-                    .ok()
+                let private_token = opt_priv
                     .map(|p| p.trim().to_string())
                     .filter(|p| !p.is_empty());
 
@@ -118,7 +139,7 @@ impl AppContext {
                     }
                     Err(e) => {
                         tracing::warn!("Error de red al validar MOODLE_TOKEN: {e}");
-                        return Err(self.tool_error_from_moodle(&e));
+                        return Err(self.tool_error_from_moodle(&e, None));
                     }
                 };
 
@@ -159,6 +180,7 @@ impl AppContext {
                     None,
                     None,
                     None,
+                    None,
                 ))
             }
         }
@@ -169,6 +191,14 @@ impl AppContext {
         *self.session.write().await = None;
         *self.site_info.write().await = None;
         *self.session_source.write().await = None;
+    }
+
+    /// Maneja centralizadamente la invalidación de token inválido,
+    /// calculando primero el mensaje contextual según el origen activo y luego limpiando la sesión.
+    pub async fn handle_invalid_token(&self) -> CallToolResult {
+        let err = self.invalid_token_error().await;
+        self.invalidate_session().await;
+        err
     }
 
     /// Retorna una respuesta de error para token inválido con sugerencia contextual.
@@ -188,6 +218,7 @@ impl AppContext {
             Some("invalidtoken".to_string()),
             None,
             Some(hint),
+            None,
         )
     }
 
@@ -210,10 +241,9 @@ impl AppContext {
         {
             Ok(info) => Arc::new(info),
             Err(MoodleError::InvalidToken) => {
-                self.invalidate_session().await;
-                return Err(self.invalid_token_error().await);
+                return Err(self.handle_invalid_token().await);
             }
-            Err(e) => return Err(self.tool_error_from_moodle(&e)),
+            Err(e) => return Err(self.tool_error_from_moodle(&e, Some(&creds))),
         };
 
         *self.site_info.write().await = Some(Arc::clone(&info));
@@ -236,38 +266,25 @@ impl AppContext {
         Ok(info.functions.clone().unwrap_or_default())
     }
 
-    /// Retorna el wstoken si existe sesión activa en caché.
-    pub fn token(&self) -> Option<String> {
-        self.session
-            .try_read()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|c| c.token.clone()))
-    }
-
-    /// Retorna el privatetoken si existe sesión activa y fue proporcionado.
-    pub fn private_token(&self) -> Option<String> {
-        self.session
-            .try_read()
-            .ok()
-            .and_then(|guard| guard.as_ref().and_then(|c| c.private_token.clone()))
-    }
-
     /// Formatea una respuesta de éxito con truncado a archivo si excede `max_response_bytes`
-    /// y sanitización de tokens.
-    pub fn ok_json<T: Serialize>(&self, value: &T, function: &str) -> CallToolResult {
-        let tok = self.token();
-        let priv_tok = self.private_token();
+    /// y sanitización de tokens utilizando las credenciales proporcionadas.
+    pub fn ok_json<T: Serialize>(
+        &self,
+        value: &T,
+        function: &str,
+        creds: Option<&Credentials>,
+    ) -> CallToolResult {
+        let tok = creds.map(|c| c.token.as_str());
+        let priv_tok = creds.and_then(|c| c.private_token.as_deref());
         match crate::mcp::output::ok_json(
             value,
             self.config.max_response_bytes,
             &self.config.download_dir,
             function,
-            tok.as_deref(),
-            priv_tok.as_deref(),
+            tok,
+            priv_tok,
         ) {
-            Ok(json_text) => {
-                crate::mcp::output::tool_success(&json_text, tok.as_deref(), priv_tok.as_deref())
-            }
+            Ok(json_text) => crate::mcp::output::tool_success(&json_text, tok, priv_tok),
             Err(err) => err,
         }
     }
@@ -280,25 +297,22 @@ impl AppContext {
         errorcode: Option<String>,
         debuginfo: Option<String>,
         hint: Option<String>,
+        creds: Option<&Credentials>,
     ) -> CallToolResult {
-        let tok = self.token();
-        let priv_tok = self.private_token();
-        crate::mcp::output::tool_error(
-            kind,
-            message,
-            errorcode,
-            debuginfo,
-            hint,
-            tok.as_deref(),
-            priv_tok.as_deref(),
-        )
+        let tok = creds.map(|c| c.token.as_str());
+        let priv_tok = creds.and_then(|c| c.private_token.as_deref());
+        crate::mcp::output::tool_error(kind, message, errorcode, debuginfo, hint, tok, priv_tok)
     }
 
     /// Convierte un `MoodleError` a respuesta de error MCP sanitizada.
-    pub fn tool_error_from_moodle(&self, err: &MoodleError) -> CallToolResult {
-        let tok = self.token();
-        let priv_tok = self.private_token();
-        crate::mcp::output::tool_error_from_moodle(err, tok.as_deref(), priv_tok.as_deref())
+    pub fn tool_error_from_moodle(
+        &self,
+        err: &MoodleError,
+        creds: Option<&Credentials>,
+    ) -> CallToolResult {
+        let tok = creds.map(|c| c.token.as_str());
+        let priv_tok = creds.and_then(|c| c.private_token.as_deref());
+        crate::mcp::output::tool_error_from_moodle(err, tok, priv_tok)
     }
 
     /// Genera la respuesta estándar para cuando no hay sesión activa.
@@ -312,6 +326,7 @@ impl AppContext {
                 "Ejecuta 'moodle-mcp login' en una terminal; no hace falta reiniciar el servidor"
                     .to_string(),
             ),
+            None,
         )
     }
 }

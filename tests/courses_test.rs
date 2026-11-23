@@ -459,8 +459,146 @@ async fn test_upcoming_events() {
     assert_eq!(events[0]["name"], "Entrega de Proyecto");
     assert_eq!(events[0]["course"], "Ingeniería de Software");
     assert_eq!(events[0]["modname"], "assign");
+    assert_eq!(events[0]["cmid"], 55);
+    assert!(events[0].get("courseid").is_some());
+    assert!(events[0]["courseid"].is_null());
     assert_eq!(events[0]["action"], "Entregar tarea");
     // Verificar formato ISO 8601
     let ts_str = events[0]["timesort"].as_str().unwrap();
     assert!(ts_str.contains('T'), "Debe ser formato ISO 8601 con 'T'");
+}
+
+#[test]
+fn test_canonical_catalog_moodle_45_parameters() {
+    let catalog_raw = include_str!("../catalog/functions.json");
+    let catalog: serde_json::Value =
+        serde_json::from_str(catalog_raw).expect("catalog/functions.json debe ser un JSON válido");
+
+    // 1. core_calendar_get_action_events_by_timesort: searchvalue
+    assert!(
+        catalog["core_calendar_get_action_events_by_timesort"]["params"]["searchvalue"].is_object()
+    );
+
+    // 2. core_message_get_conversations: favourites, mergeself
+    assert!(catalog["core_message_get_conversations"]["params"]["favourites"].is_object());
+    assert!(catalog["core_message_get_conversations"]["params"]["mergeself"].is_object());
+
+    // 3. core_message_get_conversation_messages: timefrom
+    assert!(catalog["core_message_get_conversation_messages"]["params"]["timefrom"].is_object());
+
+    // 4. core_course_get_contents: options[].name, options[].value
+    assert!(catalog["core_course_get_contents"]["params"]["options[].name"].is_object());
+    assert!(catalog["core_course_get_contents"]["params"]["options[].value"].is_object());
+
+    // 5. mod_quiz_save_attempt: preflightdata[].name, preflightdata[].value, data[].name, data[].value
+    assert!(catalog["mod_quiz_save_attempt"]["params"]["data[].name"].is_object());
+    assert!(catalog["mod_quiz_save_attempt"]["params"]["data[].value"].is_object());
+    assert!(catalog["mod_quiz_save_attempt"]["params"]["preflightdata[].name"].is_object());
+    assert!(catalog["mod_quiz_save_attempt"]["params"]["preflightdata[].value"].is_object());
+
+    // 6. mod_quiz_process_attempt: preflightdata
+    assert!(catalog["mod_quiz_process_attempt"]["params"]["preflightdata"].is_object());
+    assert!(catalog["mod_quiz_process_attempt"]["params"]["preflightdata[].name"].is_object());
+    assert!(catalog["mod_quiz_process_attempt"]["params"]["preflightdata[].value"].is_object());
+
+    // 7. mod_quiz_start_attempt, mod_quiz_get_attempt_data, mod_quiz_get_attempt_summary: preflightdata[].name
+    for fn_name in [
+        "mod_quiz_start_attempt",
+        "mod_quiz_get_attempt_data",
+        "mod_quiz_get_attempt_summary",
+    ] {
+        assert!(catalog[fn_name]["params"]["preflightdata[].name"].is_object());
+        assert!(catalog[fn_name]["params"]["preflightdata[].value"].is_object());
+    }
+
+    // 8. mod_forum_add_discussion_post: messageformat, options[].name
+    assert!(catalog["mod_forum_add_discussion_post"]["params"]["messageformat"].is_object());
+    assert!(catalog["mod_forum_add_discussion_post"]["params"]["options[].name"].is_object());
+    assert!(catalog["mod_forum_add_discussion_post"]["params"]["options[].value"].is_object());
+
+    // 9. mod_forum_add_discussion: options[].name
+    assert!(catalog["mod_forum_add_discussion"]["params"]["options[].name"].is_object());
+    assert!(catalog["mod_forum_add_discussion"]["params"]["options[].value"].is_object());
+
+    // 10. mod_forum_get_forum_discussions: groupid
+    assert!(catalog["mod_forum_get_forum_discussions"]["params"]["groupid"].is_object());
+
+    // 11. mod_forum_get_discussion_posts: includeinlineattachments
+    assert!(
+        catalog["mod_forum_get_discussion_posts"]["params"]["includeinlineattachments"].is_object()
+    );
+
+    // 12. core_message_send_instant_messages: messages[].touserid, text, textformat, clientmsgid
+    assert!(
+        catalog["core_message_send_instant_messages"]["params"]["messages[].touserid"].is_object()
+    );
+    assert!(catalog["core_message_send_instant_messages"]["params"]["messages[].text"].is_object());
+    assert!(
+        catalog["core_message_send_instant_messages"]["params"]["messages[].textformat"]
+            .is_object()
+    );
+    assert!(
+        catalog["core_message_send_instant_messages"]["params"]["messages[].clientmsgid"]
+            .is_object()
+    );
+
+    // 13. core_message_send_messages_to_conversation: messages[].text, textformat
+    assert!(
+        catalog["core_message_send_messages_to_conversation"]["params"]["messages[].text"]
+            .is_object()
+    );
+    assert!(
+        catalog["core_message_send_messages_to_conversation"]["params"]["messages[].textformat"]
+            .is_object()
+    );
+}
+
+#[tokio::test]
+async fn test_upcoming_events_with_cmid_and_courseid() {
+    let mock = MockServer::start().await;
+    let client = start_server(&mock).await;
+
+    let calendar_payload = json!({
+        "events": [
+            {
+                "name": "Entrega de Proyecto",
+                "course": { "id": 42, "fullname": "Ingeniería de Software" },
+                "modulename": "assign",
+                "instance": 55,
+                "timesort": 1780000000,
+                "url": "https://moodle.example/mod/assign/view.php?id=999",
+                "action": { "name": "Entregar tarea" }
+            },
+            {
+                "name": "Evento Sin Módulo",
+                "timesort": 1780000000,
+                "url": "https://moodle.example/calendar/view.php"
+            }
+        ]
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&calendar_payload))
+        .mount(&mock)
+        .await;
+
+    let args = json!({ "days": 7 }).as_object().unwrap().clone();
+    let res = client
+        .call_tool(CallToolRequestParams::new("upcoming_events").with_arguments(args))
+        .await
+        .expect("upcoming_events");
+    let text = res.content[0].as_text().expect("text").text.clone();
+    let events: Vec<serde_json::Value> = serde_json::from_str(&text).expect("json");
+
+    assert_eq!(events.len(), 2);
+    // Evento con id de curso y cmid extraído
+    assert_eq!(events[0]["courseid"], 42);
+    assert_eq!(events[0]["cmid"], 999);
+
+    // Evento sin curso ni cmid (deben serializarse explícitamente como null)
+    assert!(events[1].get("courseid").is_some());
+    assert!(events[1]["courseid"].is_null());
+    assert!(events[1].get("cmid").is_some());
+    assert!(events[1]["cmid"].is_null());
 }

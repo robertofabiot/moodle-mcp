@@ -152,6 +152,29 @@ fn parse_content_disposition_filename(header: &str) -> Option<String> {
     None
 }
 
+fn map_file_reqwest_error(err: reqwest::Error) -> MoodleError {
+    use std::error::Error;
+    let mut has_redirect_msg = err
+        .to_string()
+        .contains("Redirección a un dominio externo: no se sigue");
+    let mut source = err.source();
+    while let Some(s) = source {
+        if s.to_string()
+            .contains("Redirección a un dominio externo: no se sigue")
+        {
+            has_redirect_msg = true;
+            break;
+        }
+        source = s.source();
+    }
+    if has_redirect_msg {
+        return MoodleError::InvalidArguments(
+            "Redirección a un dominio externo: no se sigue".into(),
+        );
+    }
+    MoodleError::from(err.without_url())
+}
+
 impl FileClient {
     /// Inicializa un FileClient compartiendo el MoodleGate del MoodleClient original,
     /// con connect_timeout de 10s, read_timeout de 60s, sin timeout total y con DEFAULT_USER_AGENT.
@@ -161,6 +184,21 @@ impl FileClient {
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(60))
             .user_agent(DEFAULT_USER_AGENT)
+            .referer(false)
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 5 {
+                    return attempt.error("Demasiadas redirecciones (máximo 5)");
+                }
+                let initial = &attempt.previous()[0];
+                let target = attempt.url();
+                if initial.scheme() != target.scheme()
+                    || initial.host_str() != target.host_str()
+                    || initial.port_or_known_default() != target.port_or_known_default()
+                {
+                    return attempt.error("Redirección a un dominio externo: no se sigue");
+                }
+                attempt.follow()
+            }))
             .build()
             .expect("Fallo al construir reqwest::Client para FileClient");
 
@@ -185,7 +223,7 @@ impl FileClient {
             .get(url.as_str())
             .send()
             .await
-            .map_err(MoodleError::from)?;
+            .map_err(map_file_reqwest_error)?;
 
         let status = response.status();
         let content_type = response
@@ -196,7 +234,7 @@ impl FileClient {
             .to_string();
 
         if content_type.starts_with("application/json") {
-            let body = response.text().await.map_err(MoodleError::from)?;
+            let body = response.text().await.map_err(map_file_reqwest_error)?;
             match decode_envelope::<serde_json::Value>(&body) {
                 Ok(_) => {
                     return Err(MoodleError::Protocol(
@@ -239,14 +277,14 @@ impl FileClient {
         let dest_path = match dest {
             None => download_dir.join("archivos").join(&filename),
             Some(p) => {
-                let path_str = p.to_string_lossy();
-                let is_dir_target =
-                    path_str.ends_with('/') || path_str.ends_with('\\') || p.is_dir();
                 let base = if p.is_absolute() {
                     p.to_path_buf()
                 } else {
                     download_dir.join(p)
                 };
+                let path_str = p.to_string_lossy();
+                let is_dir_target =
+                    path_str.ends_with('/') || path_str.ends_with('\\') || base.is_dir();
                 if is_dir_target {
                     base.join(&filename)
                 } else {
@@ -267,22 +305,33 @@ impl FileClient {
         };
         let part_path = dest_path.with_file_name(part_filename);
 
-        let mut file = tokio::fs::File::create(&part_path)
-            .await
-            .map_err(MoodleError::from)?;
+        let mut file = match tokio::fs::File::create(&part_path).await {
+            Ok(f) => f,
+            Err(e) => return Err(MoodleError::from(e)),
+        };
         let mut total_bytes = 0u64;
 
-        while let Some(chunk) = response.chunk().await.map_err(MoodleError::from)? {
-            file.write_all(&chunk).await.map_err(MoodleError::from)?;
-            total_bytes += chunk.len() as u64;
+        let write_result: Result<()> = async {
+            while let Some(chunk) = response.chunk().await.map_err(map_file_reqwest_error)? {
+                file.write_all(&chunk).await.map_err(MoodleError::from)?;
+                total_bytes += chunk.len() as u64;
+            }
+            file.flush().await.map_err(MoodleError::from)?;
+            Ok(())
         }
+        .await;
 
-        file.flush().await.map_err(MoodleError::from)?;
         drop(file);
 
-        tokio::fs::rename(&part_path, &dest_path)
-            .await
-            .map_err(MoodleError::from)?;
+        if let Err(e) = write_result {
+            let _ = tokio::fs::remove_file(&part_path).await;
+            return Err(e);
+        }
+
+        if let Err(e) = tokio::fs::rename(&part_path, &dest_path).await {
+            let _ = tokio::fs::remove_file(&part_path).await;
+            return Err(MoodleError::from(e));
+        }
 
         let mut url_no_token = url.clone();
         let clean_pairs: Vec<(String, String)> = url_no_token
@@ -381,10 +430,10 @@ impl FileClient {
             .multipart(form)
             .send()
             .await
-            .map_err(MoodleError::from)?;
+            .map_err(map_file_reqwest_error)?;
 
         let status = response.status();
-        let body_text = response.text().await.map_err(MoodleError::from)?;
+        let body_text = response.text().await.map_err(map_file_reqwest_error)?;
 
         let value: serde_json::Value = serde_json::from_str(&body_text).map_err(|e| {
             if status.as_u16() == 503 || status.is_server_error() {

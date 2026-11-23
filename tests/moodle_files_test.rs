@@ -443,3 +443,238 @@ async fn test_file_client_large_file_download_success() {
         large_size as u64
     );
 }
+
+#[tokio::test]
+async fn test_file_client_rejects_external_redirect() {
+    let mock_origin = MockServer::start().await;
+    let mock_target = MockServer::start().await;
+
+    // La petición al segundo mock NO debe llegar
+    Mock::given(method("GET"))
+        .and(path("/file.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("externo"))
+        .expect(0)
+        .mount(&mock_target)
+        .await;
+
+    // El primer mock responde 302 hacia el segundo mock
+    Mock::given(method("GET"))
+        .and(path("/webservice/pluginfile.php/1/redirect.pdf"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", format!("{}/file.pdf", mock_target.uri())),
+        )
+        .expect(1)
+        .mount(&mock_origin)
+        .await;
+
+    let gate = MoodleGate::new(4, 3).without_jitter();
+    let moodle_client = MoodleClient::from_builder(
+        MoodleClientBuilder::new()
+            .base_url(mock_origin.uri())
+            .gate(gate),
+    );
+    let file_client = FileClient::new(&moodle_client);
+
+    let base_url = Url::parse(&mock_origin.uri()).unwrap();
+    let authorized_url = authorize_file_url(
+        &base_url,
+        &format!("{}/pluginfile.php/1/redirect.pdf", mock_origin.uri()),
+        "tok123",
+    )
+    .unwrap();
+
+    let td = tempdir().unwrap();
+    let result = file_client.download(&authorized_url, None, td.path()).await;
+
+    match result {
+        Err(MoodleError::InvalidArguments(msg)) => {
+            assert!(
+                msg.contains("Redirección a un dominio externo: no se sigue"),
+                "Mensaje inesperado: {msg}"
+            );
+        }
+        other => panic!("Esperaba InvalidArguments con redirección externa, obtuve: {other:?}"),
+    }
+}
+
+struct RefererAbsentMatcher;
+
+impl wiremock::Match for RefererAbsentMatcher {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        !request.headers.contains_key("referer")
+    }
+}
+
+#[tokio::test]
+async fn test_file_client_same_origin_redirect_followed_without_referer() {
+    let mock = MockServer::start().await;
+
+    // 1. Redirección same-origin 302
+    Mock::given(method("GET"))
+        .and(path("/webservice/pluginfile.php/1/initial.txt"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", "/webservice/pluginfile.php/1/target.txt"),
+        )
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    // 2. Destino same-origin: se exige que NO tenga cabecera Referer
+    Mock::given(method("GET"))
+        .and(path("/webservice/pluginfile.php/1/target.txt"))
+        .and(RefererAbsentMatcher)
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("same-origin content")
+                .insert_header("content-disposition", "attachment; filename=\"target.txt\""),
+        )
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let gate = MoodleGate::new(4, 3).without_jitter();
+    let moodle_client =
+        MoodleClient::from_builder(MoodleClientBuilder::new().base_url(mock.uri()).gate(gate));
+    let file_client = FileClient::new(&moodle_client);
+
+    let base_url = Url::parse(&mock.uri()).unwrap();
+    let authorized_url = authorize_file_url(
+        &base_url,
+        &format!("{}/pluginfile.php/1/initial.txt", mock.uri()),
+        "tok123",
+    )
+    .unwrap();
+
+    let td = tempdir().unwrap();
+    let downloaded = file_client
+        .download(&authorized_url, None, td.path())
+        .await
+        .expect("descarga con redirección same-origin exitosa");
+
+    let content = tokio::fs::read_to_string(&downloaded.path).await.unwrap();
+    assert_eq!(content, "same-origin content");
+}
+
+#[tokio::test]
+async fn test_file_client_network_error_never_leaks_token() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/webservice/pluginfile.php/1/error.bin"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+        .mount(&mock)
+        .await;
+
+    let gate = MoodleGate::new(4, 3).without_jitter();
+    let moodle_client =
+        MoodleClient::from_builder(MoodleClientBuilder::new().base_url(mock.uri()).gate(gate));
+    let file_client = FileClient::new(&moodle_client);
+
+    let secret_token = "SECRET_TOKEN_XYZ_987654";
+    let base_url = Url::parse(&mock.uri()).unwrap();
+    let authorized_url = authorize_file_url(
+        &base_url,
+        &format!("{}/pluginfile.php/1/error.bin", mock.uri()),
+        secret_token,
+    )
+    .unwrap();
+
+    let td = tempdir().unwrap();
+    let err = file_client
+        .download(&authorized_url, None, td.path())
+        .await
+        .unwrap_err();
+
+    let err_str = err.to_string();
+    assert!(
+        !err_str.contains(secret_token),
+        "El error no debe contener el token: {err_str}"
+    );
+}
+
+#[tokio::test]
+async fn test_file_client_cleans_up_part_file_on_failure() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/webservice/pluginfile.php/1/broken.bin"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock)
+        .await;
+
+    let gate = MoodleGate::new(4, 3).without_jitter();
+    let moodle_client =
+        MoodleClient::from_builder(MoodleClientBuilder::new().base_url(mock.uri()).gate(gate));
+    let file_client = FileClient::new(&moodle_client);
+
+    let base_url = Url::parse(&mock.uri()).unwrap();
+    let authorized_url = authorize_file_url(
+        &base_url,
+        &format!("{}/pluginfile.php/1/broken.bin", mock.uri()),
+        "tok123",
+    )
+    .unwrap();
+
+    let td = tempdir().unwrap();
+    let result = file_client.download(&authorized_url, None, td.path()).await;
+    assert!(result.is_err());
+
+    let mut entries = tokio::fs::read_dir(td.path()).await.unwrap();
+    let mut part_count = 0;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.file_name().to_string_lossy().ends_with(".part") {
+            part_count += 1;
+        }
+    }
+    assert_eq!(
+        part_count, 0,
+        "No deben quedar archivos .part tras un fallo"
+    );
+}
+
+#[tokio::test]
+async fn test_file_client_slow_transfer_success() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+
+    tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+
+            let headers = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"slow.txt\"\r\n\r\n";
+            let _ = socket.write_all(headers.as_bytes()).await;
+
+            // Primer fragmento
+            let _ = socket.write_all(b"5\r\nhello\r\n").await;
+
+            // Pausa mayor a 20 segundos entre fragmentos
+            tokio::time::sleep(std::time::Duration::from_secs(21)).await;
+
+            // Segundo fragmento y cierre
+            let _ = socket.write_all(b"6\r\n world\r\n0\r\n\r\n").await;
+            let _ = socket.flush().await;
+        }
+    });
+
+    let base_uri = format!("http://{addr}");
+    let gate = MoodleGate::new(4, 3).without_jitter();
+    let moodle_client =
+        MoodleClient::from_builder(MoodleClientBuilder::new().base_url(&base_uri).gate(gate));
+    let file_client = FileClient::new(&moodle_client);
+
+    let file_url = Url::parse(&format!("{base_uri}/slow.txt")).unwrap();
+
+    let td = tempdir().unwrap();
+    let downloaded = file_client
+        .download(&file_url, None, td.path())
+        .await
+        .expect("descarga con transferencia lenta exitosa");
+
+    let content = tokio::fs::read_to_string(&downloaded.path).await.unwrap();
+    assert_eq!(content, "hello world");
+}
