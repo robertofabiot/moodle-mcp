@@ -107,9 +107,9 @@ pub struct UpcomingEventOutput {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub course: Option<String>,
+    pub courseid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modname: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub cmid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<i64>,
@@ -195,6 +195,8 @@ struct CalendarEventRaw {
 #[derive(Deserialize)]
 struct CalendarCourseRaw {
     #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
     fullname: Option<String>,
 }
 
@@ -202,6 +204,21 @@ struct CalendarCourseRaw {
 struct CalendarActionRaw {
     #[serde(default)]
     name: Option<String>,
+}
+
+fn extract_cmid_from_calendar_url(url_str: &str) -> Option<i64> {
+    let parsed = Url::parse(url_str)
+        .ok()
+        .or_else(|| Url::parse("http://localhost").ok()?.join(url_str).ok())?;
+    let path = parsed.path();
+    if path.contains("/mod/") && path.ends_with("/view.php") {
+        for (k, v) in parsed.query_pairs() {
+            if k == "id" {
+                return v.parse::<i64>().ok();
+            }
+        }
+    }
+    None
 }
 
 #[tool_router(router = courses_router, vis = "pub(crate)")]
@@ -345,7 +362,8 @@ impl MoodleMcp {
             })
             .collect();
 
-        self.ctx.ok_json(&detail_sections, "get_course", Some(&creds))
+        self.ctx
+            .ok_json(&detail_sections, "get_course", Some(&creds))
     }
 
     /// Comprueba si ha habido cambios o actualizaciones en los módulos de un curso desde un momento específico.
@@ -384,7 +402,8 @@ impl MoodleMcp {
             Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
-        self.ctx.ok_json(&updates, "course_updates_since", Some(&creds))
+        self.ctx
+            .ok_json(&updates, "course_updates_since", Some(&creds))
     }
 
     /// Obtiene las calificaciones globales del estudiante o el desglose detallado de un curso.
@@ -417,10 +436,7 @@ impl MoodleMcp {
                     .await
                 {
                     Ok(r) => r,
-                    Err(MoodleError::InvalidToken) => {
-                        self.ctx.invalidate_session().await;
-                        return self.ctx.invalid_token_error().await;
-                    }
+                    Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
                     Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
                 };
 
@@ -458,10 +474,7 @@ impl MoodleMcp {
                     .await
                 {
                     Ok(r) => r,
-                    Err(MoodleError::InvalidToken) => {
-                        self.ctx.invalidate_session().await;
-                        return self.ctx.invalid_token_error().await;
-                    }
+                    Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
                     Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
                 };
 
@@ -554,11 +567,15 @@ impl MoodleMcp {
                     .map(|dt| dt.to_rfc3339())
                     .unwrap_or_else(|| e.timesort.to_string());
 
+                let cmid = e.url.as_deref().and_then(extract_cmid_from_calendar_url);
+                let courseid = e.course.as_ref().and_then(|c| c.id);
+
                 UpcomingEventOutput {
                     name: e.name,
                     course: e.course.and_then(|c| c.fullname),
+                    courseid,
                     modname: e.modulename,
-                    cmid: None,
+                    cmid,
                     instance: e.instance,
                     timesort: timesort_iso,
                     url: e.url,

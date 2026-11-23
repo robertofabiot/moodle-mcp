@@ -459,6 +459,9 @@ async fn test_upcoming_events() {
     assert_eq!(events[0]["name"], "Entrega de Proyecto");
     assert_eq!(events[0]["course"], "Ingeniería de Software");
     assert_eq!(events[0]["modname"], "assign");
+    assert_eq!(events[0]["cmid"], 55);
+    assert!(events[0].get("courseid").is_some());
+    assert!(events[0]["courseid"].is_null());
     assert_eq!(events[0]["action"], "Entregar tarea");
     // Verificar formato ISO 8601
     let ts_str = events[0]["timesort"].as_str().unwrap();
@@ -550,3 +553,52 @@ fn test_canonical_catalog_moodle_45_parameters() {
     );
 }
 
+#[tokio::test]
+async fn test_upcoming_events_with_cmid_and_courseid() {
+    let mock = MockServer::start().await;
+    let client = start_server(&mock).await;
+
+    let calendar_payload = json!({
+        "events": [
+            {
+                "name": "Entrega de Proyecto",
+                "course": { "id": 42, "fullname": "Ingeniería de Software" },
+                "modulename": "assign",
+                "instance": 55,
+                "timesort": 1780000000,
+                "url": "https://moodle.example/mod/assign/view.php?id=999",
+                "action": { "name": "Entregar tarea" }
+            },
+            {
+                "name": "Evento Sin Módulo",
+                "timesort": 1780000000,
+                "url": "https://moodle.example/calendar/view.php"
+            }
+        ]
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&calendar_payload))
+        .mount(&mock)
+        .await;
+
+    let args = json!({ "days": 7 }).as_object().unwrap().clone();
+    let res = client
+        .call_tool(CallToolRequestParams::new("upcoming_events").with_arguments(args))
+        .await
+        .expect("upcoming_events");
+    let text = res.content[0].as_text().expect("text").text.clone();
+    let events: Vec<serde_json::Value> = serde_json::from_str(&text).expect("json");
+
+    assert_eq!(events.len(), 2);
+    // Evento con id de curso y cmid extraído
+    assert_eq!(events[0]["courseid"], 42);
+    assert_eq!(events[0]["cmid"], 999);
+
+    // Evento sin curso ni cmid (deben serializarse explícitamente como null)
+    assert!(events[1].get("courseid").is_some());
+    assert!(events[1]["courseid"].is_null());
+    assert!(events[1].get("cmid").is_some());
+    assert!(events[1]["cmid"].is_null());
+}
