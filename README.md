@@ -108,6 +108,11 @@ En tu archivo de configuración de Claude Desktop:
 | `moodle_download` | `url: string`, `dest?: string` | `read_only_hint = false`, `destructive_hint = false`, `idempotent_hint = true` | Descarga cualquier archivo de Moodle (recursos, tareas, adjuntos) a disco local. Si el archivo es texto o HTML menor al límite, incluye su representación en Markdown. |
 | `moodle_upload` | `paths: string[]`, `itemid?: int` | `destructive_hint = false` | Sube uno o más archivos locales al área de borrador (`draft`) de Moodle vía `upload.php`, devolviendo el `itemid` para entregas o foros. |
 | `moodle_sync_course` | `courseid: int`, `dest?: string` | `read_only_hint = false`, `destructive_hint = false`, `idempotent_hint = true` | Revisa y replica incrementalmente todos los contenidos y archivos de un curso a disco local, manteniendo un manifiesto `.moodle-sync.json` y listando enlaces externos en `enlaces.md`. |
+| `list_courses` | `include_past?: bool` | `read_only_hint = true` | Lista los cursos matriculados del estudiante, filtrando activos por defecto o incluyendo pasados con `include_past = true`. |
+| `get_course` | `courseid: int` | `read_only_hint = true` | Devuelve el temario y árbol completo de secciones y módulos de un curso con resúmenes en Markdown y archivos asociados. |
+| `course_updates_since` | `courseid: int`, `since: int` | `read_only_hint = true` | Consulta las actualizaciones o cambios producidos en los módulos de un curso desde un timestamp Unix epoch. |
+| `get_grades` | `courseid?: int` | `read_only_hint = true` | Obtiene el resumen de notas globales entre cursos o el desglose detallado de actividades evaluables de un curso específico. |
+| `upcoming_events` | `days?: int` | `read_only_hint = true` | Consulta las próximas fechas límites de entrega y eventos del calendario del estudiante (por defecto 14 días). |
 
 ---
 
