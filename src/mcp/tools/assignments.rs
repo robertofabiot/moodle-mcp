@@ -1,4 +1,4 @@
-use crate::content::html_to_markdown;
+use crate::content::{html_to_markdown, markdown_to_html, plain_text_to_html};
 use crate::mcp::server::MoodleMcp;
 use crate::moodle::error::MoodleError;
 use crate::moodle::gate::Priority;
@@ -8,6 +8,12 @@ use rmcp::model::CallToolResult;
 use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use url::Url;
+
+fn default_onlinetext_format() -> String {
+    "markdown".to_string()
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetAssignmentParams {
@@ -15,6 +21,27 @@ pub struct GetAssignmentParams {
     pub cmid: Option<i64>,
     /// ID de la instancia de la tarea (assignid). Mutuamente excluyente con cmid.
     pub assignid: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SubmitAssignmentParams {
+    /// ID del módulo de curso (cmid). Mutuamente excluyente con assignid.
+    pub cmid: Option<i64>,
+    /// ID de la instancia de la tarea (assignid). Mutuamente excluyente con cmid.
+    pub assignid: Option<i64>,
+    /// Rutas locales de los archivos a subir como entrega
+    pub files: Option<Vec<String>>,
+    /// Texto en línea para la entrega
+    pub onlinetext: Option<String>,
+    /// Formato del texto en línea: "markdown" (por defecto), "html" o "plain"
+    #[serde(default = "default_onlinetext_format")]
+    pub onlinetext_format: String,
+    /// Si es true, conserva y reenvía los archivos existentes junto con los nuevos
+    #[serde(default)]
+    pub keep_existing_files: bool,
+    /// Si es true y la tarea usa borradores, envía la entrega definitivamente a calificación
+    #[serde(default)]
+    pub r#final: bool,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -476,6 +503,32 @@ fn parse_grade_and_feedback(
     (grade_info, feedback_markdown)
 }
 
+fn extract_warnings(val: &serde_json::Value) -> Option<String> {
+    let mut warnings = Vec::new();
+    if let Some(arr) = val.as_array() {
+        for item in arr {
+            if let Some(msg) = item.get("message").and_then(|m| m.as_str()) {
+                warnings.push(msg.to_string());
+            } else if let Some(code) = item.get("warningcode").and_then(|c| c.as_str()) {
+                warnings.push(code.to_string());
+            }
+        }
+    } else if let Some(arr) = val.get("warnings").and_then(|w| w.as_array()) {
+        for item in arr {
+            if let Some(msg) = item.get("message").and_then(|m| m.as_str()) {
+                warnings.push(msg.to_string());
+            } else if let Some(code) = item.get("warningcode").and_then(|c| c.as_str()) {
+                warnings.push(code.to_string());
+            }
+        }
+    }
+    if warnings.is_empty() {
+        None
+    } else {
+        Some(warnings.join("; "))
+    }
+}
+
 #[tool_router(router = assignments_router, vis = "pub(crate)")]
 impl MoodleMcp {
     /// Consulta la información detallada de una tarea en Moodle.
@@ -611,5 +664,192 @@ impl MoodleMcp {
         };
 
         self.ctx.ok_json(&detail, "get_assignment", Some(&creds))
+    }
+
+    /// Guarda o envía una entrega de tarea con archivos y/o texto en línea.
+    #[rmcp::tool(
+        name = "submit_assignment",
+        description = "Guarda o envía una entrega de tarea con archivos locales y/o texto en línea, con opción de conservar archivos previos y envío definitivo a calificación",
+        annotations(destructive_hint = true)
+    )]
+    pub async fn submit_assignment(
+        &self,
+        params: Parameters<SubmitAssignmentParams>,
+    ) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        let module_ref = match resolve_module(
+            &self.ctx.client,
+            &creds.token,
+            "assign",
+            params.0.cmid,
+            params.0.assignid,
+        )
+        .await
+        {
+            Ok(m) => m,
+            Err(MoodleError::InvalidArguments(msg)) => {
+                return self.ctx.tool_error(
+                    "invalid_arguments",
+                    msg,
+                    None,
+                    None,
+                    None,
+                    Some(&creds),
+                );
+            }
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        let new_files = params.0.files.unwrap_or_default();
+        let onlinetext = params.0.onlinetext;
+        let has_files = !new_files.is_empty();
+        let has_text = onlinetext
+            .as_ref()
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
+
+        if !has_files && !has_text {
+            return self.ctx.tool_error(
+                "invalid_arguments",
+                "Debes proporcionar files o onlinetext",
+                None,
+                None,
+                None,
+                Some(&creds),
+            );
+        }
+
+        let base_url = match Url::parse(self.ctx.client.base_url()) {
+            Ok(u) => u,
+            Err(e) => {
+                return self.ctx.tool_error(
+                    "invalid_arguments",
+                    format!("URL base de Moodle inválida: {e}"),
+                    None,
+                    None,
+                    None,
+                    Some(&creds),
+                );
+            }
+        };
+
+        let mut files_itemid: Option<i64> = None;
+        if has_files {
+            let paths: Vec<PathBuf> = new_files.iter().map(PathBuf::from).collect();
+            let upload_res = match self
+                .ctx
+                .file_client
+                .upload(&base_url, &creds.token, &paths, None)
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+            };
+            files_itemid = Some(upload_res.itemid);
+        }
+
+        let mut onlinetext_html_and_itemid: Option<(String, i64)> = None;
+        if let Some(text) = onlinetext {
+            if !text.trim().is_empty() {
+                let html = match params.0.onlinetext_format.as_str() {
+                    "plain" => plain_text_to_html(&text),
+                    "html" => text,
+                    _ => markdown_to_html(&text),
+                };
+
+                let empty_map = serde_json::Map::new();
+                let draft_resp = match self
+                    .ctx
+                    .client
+                    .call_raw(
+                        &creds.token,
+                        "core_files_get_unused_draft_itemid",
+                        &empty_map,
+                    )
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+                };
+
+                let draft_itemid = draft_resp
+                    .as_i64()
+                    .or_else(|| draft_resp.get("value").and_then(|v| v.as_i64()))
+                    .or_else(|| draft_resp.get("itemid").and_then(|v| v.as_i64()))
+                    .unwrap_or_default();
+
+                onlinetext_html_and_itemid = Some((html, draft_itemid));
+            }
+        }
+
+        let mut save_params = serde_json::Map::new();
+        save_params.insert(
+            "assignmentid".to_string(),
+            serde_json::json!(module_ref.instance),
+        );
+
+        let mut plugindata = serde_json::Map::new();
+        if let Some(fid) = files_itemid {
+            plugindata.insert("files_filemanager".to_string(), serde_json::json!(fid));
+        }
+        if let Some((html, text_itemid)) = onlinetext_html_and_itemid {
+            plugindata.insert(
+                "onlinetext_editor".to_string(),
+                serde_json::json!({
+                    "text": html,
+                    "format": 1,
+                    "itemid": text_itemid,
+                }),
+            );
+        }
+        save_params.insert(
+            "plugindata".to_string(),
+            serde_json::Value::Object(plugindata),
+        );
+
+        let save_resp = match self
+            .ctx
+            .write_client
+            .call_raw(&creds.token, "mod_assign_save_submission", &save_params)
+            .await
+        {
+            Ok(v) => v,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        if let Some(warn_msg) = extract_warnings(&save_resp) {
+            return self
+                .ctx
+                .tool_error("api", warn_msg, None, None, None, Some(&creds));
+        }
+
+        let instance_str = module_ref.instance.to_string();
+        let status_query = [
+            ("wstoken", creds.token.as_str()),
+            ("wsfunction", "mod_assign_get_submission_status"),
+            ("moodlewsrestformat", "json"),
+            ("assignid", instance_str.as_str()),
+        ];
+
+        let final_status_resp: SubmissionStatusResponse = match self
+            .ctx
+            .client
+            .post_webservice(&status_query, Priority::Interactive)
+            .await
+        {
+            Ok(r) => r,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        let final_status = parse_submission_status(&final_status_resp);
+        self.ctx
+            .ok_json(&final_status, "submit_assignment", Some(&creds))
     }
 }
