@@ -1,0 +1,859 @@
+{
+  "core_webservice_get_site_info": {
+    "description": "Devuelve información del sitio Moodle y del usuario autenticado (sitename, username, userid, funciones habilitadas, etc.).",
+    "params": {
+      "serviceshortnames": {
+        "type": "list",
+        "required": false,
+        "description": "Filtro opcional por nombres cortos de servicios web"
+      }
+    },
+    "example": {},
+    "notes": "No requiere parámetros obligatorios. Ideal para diagnosticar la sesión y capacidades."
+  },
+  "core_enrol_get_users_courses": {
+    "description": "Obtiene la lista de cursos en los que está matriculado un usuario específico.",
+    "params": {
+      "userid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del usuario en Moodle"
+      },
+      "returnusercount": {
+        "type": "bool",
+        "required": false,
+        "description": "Indica si debe retornar el conteo de usuarios enrolados"
+      }
+    },
+    "example": {
+      "userid": 10001
+    },
+    "notes": "Devuelve id, shortname, fullname, startdate, enddate, visible, entre otros."
+  },
+  "core_course_get_contents": {
+    "description": "Obtiene el árbol completo de secciones, módulos y recursos de un curso.",
+    "params": {
+      "courseid": {
+        "type": "int",
+        "required": true,
+        "description": "ID numérico del curso"
+      },
+      "options": {
+        "type": "list",
+        "required": false,
+        "description": "Opciones de filtrado (ej. excluir módulos, incluir solo visibles)"
+      }
+    },
+    "example": {
+      "courseid": 55
+    },
+    "notes": "Cada sección contiene una lista de módulos con sus archivos y configuraciones."
+  },
+  "core_course_get_updates_since": {
+    "description": "Comprueba si ha habido cambios o actualizaciones en los módulos de un curso desde un momento específico.",
+    "params": {
+      "courseid": {
+        "type": "int",
+        "required": true,
+        "description": "ID numérico del curso"
+      },
+      "since": {
+        "type": "int",
+        "required": true,
+        "description": "Timestamp Unix epoch de referencia"
+      },
+      "filter": {
+        "type": "list",
+        "required": false,
+        "description": "Filtro opcional de módulos o áreas"
+      }
+    },
+    "example": {
+      "courseid": 55,
+      "since": 1700000000
+    },
+    "notes": "Útil para sincronización incremental y notificaciones de actividad reciente."
+  },
+  "core_course_get_course_module": {
+    "description": "Devuelve la información detallada de un módulo de curso a partir de su cmid.",
+    "params": {
+      "cmid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del módulo del curso (course_module id)"
+      }
+    },
+    "example": {
+      "cmid": 893829
+    },
+    "notes": "Resuelve la correspondencia entre cmid, instance y course."
+  },
+  "core_course_get_course_module_by_instance": {
+    "description": "Devuelve la información de un módulo de curso a partir del nombre del módulo e ID de instancia.",
+    "params": {
+      "module": {
+        "type": "string",
+        "required": true,
+        "description": "Nombre del módulo (ej. assign, quiz, forum, page)"
+      },
+      "instance": {
+        "type": "int",
+        "required": true,
+        "description": "ID de la instancia de la actividad/recurso"
+      }
+    },
+    "example": {
+      "module": "assign",
+      "instance": 123
+    },
+    "notes": "Permite obtener el cmid a partir de la instancia específica de la actividad."
+  },
+  "gradereport_overview_get_course_grades": {
+    "description": "Obtiene el resumen de calificaciones globales de un usuario en todos sus cursos matriculados.",
+    "params": {
+      "userid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del usuario (por defecto el usuario actual)"
+      }
+    },
+    "example": {
+      "userid": 10001
+    },
+    "notes": "Devuelve las notas finales acumuladas por curso."
+  },
+  "gradereport_user_get_grade_items": {
+    "description": "Obtiene el desglose detallado de calificaciones e ítems evaluables para un usuario en un curso.",
+    "params": {
+      "courseid": {
+        "type": "int",
+        "required": true,
+        "description": "ID numérico del curso"
+      },
+      "userid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del usuario (por defecto el usuario actual)"
+      },
+      "groupid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del grupo para filtrar"
+      }
+    },
+    "example": {
+      "courseid": 55,
+      "userid": 10001
+    },
+    "notes": "Incluye tareas, cuestionarios, porcentajes, rangos y retroalimentación."
+  },
+  "core_calendar_get_action_events_by_timesort": {
+    "description": "Obtiene los eventos y tareas con acciones pendientes ordenados cronológicamente por fecha límite.",
+    "params": {
+      "timesortfrom": {
+        "type": "int",
+        "required": false,
+        "description": "Timestamp Unix de inicio (por defecto ahora)"
+      },
+      "timesortto": {
+        "type": "int",
+        "required": false,
+        "description": "Timestamp Unix de fin del rango temporal"
+      },
+      "aftereventid": {
+        "type": "int",
+        "required": false,
+        "description": "Paginación: ID del último evento visto"
+      },
+      "limitnum": {
+        "type": "int",
+        "required": false,
+        "description": "Límite máximo de resultados (por defecto 20, máx 50)"
+      },
+      "limittononsuspendedevents": {
+        "type": "bool",
+        "required": false,
+        "description": "Limitar a eventos de cursos no suspendidos"
+      },
+      "userid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del usuario a consultar"
+      }
+    },
+    "example": {
+      "timesortfrom": 1700000000,
+      "limitnum": 20
+    },
+    "notes": "Esencial para consultar entregas próximas de tareas y cuestionarios."
+  },
+  "mod_assign_get_assignments": {
+    "description": "Obtiene la lista y configuración de tareas para uno o varios cursos.",
+    "params": {
+      "courseids": {
+        "type": "list",
+        "required": false,
+        "description": "Lista de IDs de cursos a consultar"
+      },
+      "capabilities": {
+        "type": "list",
+        "required": false,
+        "description": "Filtro opcional por capacidades"
+      },
+      "includenotenrolledcourses": {
+        "type": "bool",
+        "required": false,
+        "description": "Incluir cursos donde no se está matriculado"
+      }
+    },
+    "example": {
+      "courseids": [
+        55
+      ]
+    },
+    "notes": "Retorna fechas de apertura, entrega límite y corte, así como opciones de submission."
+  },
+  "mod_assign_get_submission_status": {
+    "description": "Obtiene el estado de entrega y calificación de una tarea para un estudiante.",
+    "params": {
+      "assignid": {
+        "type": "int",
+        "required": true,
+        "description": "ID de la tarea (instancia de mod_assign)"
+      },
+      "userid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del usuario (por defecto el usuario actual)"
+      },
+      "groupid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del grupo para entregas grupales"
+      }
+    },
+    "example": {
+      "assignid": 123
+    },
+    "notes": "Muestra si hay borrador, entrega definitiva, calificación y archivos entregados."
+  },
+  "mod_assign_save_submission": {
+    "description": "Guarda o actualiza la entrega de una tarea (archivos y/o texto en línea) en estado borrador.",
+    "params": {
+      "assignmentid": {
+        "type": "int",
+        "required": true,
+        "description": "ID de la tarea"
+      },
+      "plugindata.onlinetext_editor.text": {
+        "type": "string",
+        "required": false,
+        "description": "Texto en línea de la entrega"
+      },
+      "plugindata.onlinetext_editor.format": {
+        "type": "int",
+        "required": false,
+        "description": "Formato del texto (1 = HTML)"
+      },
+      "plugindata.onlinetext_editor.itemid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del borrador de archivos adjuntos al texto"
+      },
+      "plugindata.files_filemanager": {
+        "type": "int",
+        "required": false,
+        "description": "Draft itemid devuelto por upload.php con los archivos"
+      }
+    },
+    "example": {
+      "assignmentid": 123,
+      "plugindata": {
+        "onlinetext_editor": {
+          "text": "Entrega",
+          "format": 1
+        }
+      }
+    },
+    "notes": "Operación de escritura sin reintentos automáticos."
+  },
+  "mod_assign_submit_for_grading": {
+    "description": "Envía una entrega en borrador como entrega final y definitiva para calificación.",
+    "params": {
+      "assignmentid": {
+        "type": "int",
+        "required": true,
+        "description": "ID de la tarea"
+      },
+      "acceptsubmissionstatement": {
+        "type": "bool",
+        "required": true,
+        "description": "Aceptación de la declaración de autoría y originalidad"
+      }
+    },
+    "example": {
+      "assignmentid": 123,
+      "acceptsubmissionstatement": true
+    },
+    "notes": "Acción destructiva e irreversible: confirma antes con el usuario."
+  },
+  "core_files_get_unused_draft_itemid": {
+    "description": "Genera y reserva un nuevo itemid no utilizado en el área de borradores de archivos.",
+    "params": {},
+    "example": {},
+    "notes": "Necesario para adjuntar archivos a tareas, foros o editores de texto."
+  },
+  "mod_quiz_get_quizzes_by_courses": {
+    "description": "Obtiene la lista y parámetros de cuestionarios presentes en los cursos especificados.",
+    "params": {
+      "courseids": {
+        "type": "list",
+        "required": false,
+        "description": "Lista de IDs de cursos a consultar"
+      }
+    },
+    "example": {
+      "courseids": [
+        55
+      ]
+    },
+    "notes": "Retorna fechas de apertura, cierre, límite de tiempo e intentos permitidos."
+  },
+  "mod_quiz_get_quiz_access_information": {
+    "description": "Consulta las reglas de acceso, contraseñas y restricciones de un cuestionario.",
+    "params": {
+      "quizid": {
+        "type": "int",
+        "required": true,
+        "description": "ID de la instancia del cuestionario"
+      }
+    },
+    "example": {
+      "quizid": 45
+    },
+    "notes": "Informa si requiere contraseña, Safe Exam Browser o si el acceso está bloqueado."
+  },
+  "mod_quiz_get_attempt_access_information": {
+    "description": "Obtiene las reglas de acceso y restricciones para un intento específico de un cuestionario.",
+    "params": {
+      "quizid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del cuestionario"
+      },
+      "attemptid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del intento actual si ya existe"
+      }
+    },
+    "example": {
+      "quizid": 45,
+      "attemptid": 789
+    },
+    "notes": "Indica si se puede iniciar un nuevo intento o si se ha superado el límite."
+  },
+  "mod_quiz_get_user_attempts": {
+    "description": "Obtiene el historial de intentos realizados por un usuario en un cuestionario.",
+    "params": {
+      "quizid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del cuestionario"
+      },
+      "userid": {
+        "type": "int",
+        "required": false,
+        "description": "ID del usuario (por defecto el actual)"
+      },
+      "status": {
+        "type": "string",
+        "required": false,
+        "description": "all | finished | unfinished"
+      },
+      "includepreviews": {
+        "type": "bool",
+        "required": false,
+        "description": "Incluir intentos de previsualización"
+      }
+    },
+    "example": {
+      "quizid": 45,
+      "status": "all"
+    },
+    "notes": "Devuelve estado de cada intento, calificaciones obtenidas y fechas de inicio/fin."
+  },
+  "mod_quiz_start_attempt": {
+    "description": "Inicia un nuevo intento de resolución para un cuestionario.",
+    "params": {
+      "quizid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del cuestionario"
+      },
+      "preflightdata": {
+        "type": "list",
+        "required": false,
+        "description": "Datos previos requeridos (ej. contraseña del cuestionario)"
+      },
+      "forcenew": {
+        "type": "bool",
+        "required": false,
+        "description": "Forzar la creación de un nuevo intento si ya existía uno incompleto"
+      }
+    },
+    "example": {
+      "quizid": 45,
+      "forcenew": false
+    },
+    "notes": "Operación de escritura. Retorna el attemptid para navegar sus páginas."
+  },
+  "mod_quiz_get_attempt_data": {
+    "description": "Obtiene las preguntas y datos de una página de un intento de cuestionario en curso.",
+    "params": {
+      "attemptid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del intento activo"
+      },
+      "page": {
+        "type": "int",
+        "required": true,
+        "description": "Número de página (inicia en 0)"
+      },
+      "preflightdata": {
+        "type": "list",
+        "required": false,
+        "description": "Datos de preflight como contraseñas"
+      }
+    },
+    "example": {
+      "attemptid": 789,
+      "page": 0
+    },
+    "notes": "Retorna el HTML renderizado de las preguntas y los campos ocultos de secuencia."
+  },
+  "mod_quiz_save_attempt": {
+    "description": "Guarda las respuestas proporcionadas para las preguntas de un intento sin finalizarlo.",
+    "params": {
+      "attemptid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del intento activo"
+      },
+      "data": {
+        "type": "list",
+        "required": true,
+        "description": "Pares nombre-valor con las respuestas y tokens de secuencia"
+      },
+      "preflightdata": {
+        "type": "list",
+        "required": false,
+        "description": "Datos de preflight opcionales"
+      }
+    },
+    "example": {
+      "attemptid": 789,
+      "data": [
+        {
+          "name": "q10:1_answer",
+          "value": "1"
+        }
+      ]
+    },
+    "notes": "Guarda el progreso de forma periódica o antes de cambiar de página."
+  },
+  "mod_quiz_process_attempt": {
+    "description": "Procesa respuestas y/o finaliza formalmente un intento de cuestionario.",
+    "params": {
+      "attemptid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del intento"
+      },
+      "data": {
+        "type": "list",
+        "required": false,
+        "description": "Respuestas finales a enviar"
+      },
+      "finishattempt": {
+        "type": "bool",
+        "required": false,
+        "description": "true para cerrar y calificar definitivamente el intento"
+      },
+      "timeup": {
+        "type": "bool",
+        "required": false,
+        "description": "true si el tiempo límite del cuestionario expiró"
+      }
+    },
+    "example": {
+      "attemptid": 789,
+      "finishattempt": true
+    },
+    "notes": "finishattempt=true es definitivo e irreversible: califica el intento."
+  },
+  "mod_quiz_get_attempt_summary": {
+    "description": "Devuelve el resumen de estado de todas las preguntas de un intento (contestadas, sin responder, etc.).",
+    "params": {
+      "attemptid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del intento"
+      },
+      "preflightdata": {
+        "type": "list",
+        "required": false,
+        "description": "Datos de preflight"
+      }
+    },
+    "example": {
+      "attemptid": 789
+    },
+    "notes": "Permite verificar qué preguntas faltan antes de enviar el intento a calificación."
+  },
+  "mod_quiz_get_attempt_review": {
+    "description": "Obtiene la revisión completa, retroalimentación y respuestas de un intento finalizado.",
+    "params": {
+      "attemptid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del intento terminado"
+      },
+      "page": {
+        "type": "int",
+        "required": false,
+        "description": "Página específica a revisar (-1 para todas)"
+      }
+    },
+    "example": {
+      "attemptid": 789,
+      "page": -1
+    },
+    "notes": "Sujeto a las reglas de revisión configuradas por el docente."
+  },
+  "mod_forum_get_forums_by_courses": {
+    "description": "Obtiene la lista y opciones de configuración de foros en los cursos indicados.",
+    "params": {
+      "courseids": {
+        "type": "list",
+        "required": false,
+        "description": "Lista de IDs de cursos"
+      }
+    },
+    "example": {
+      "courseids": [
+        55
+      ]
+    },
+    "notes": "Devuelve tipo de foro, límites de adjuntos y suscripciones."
+  },
+  "mod_forum_get_forum_discussions": {
+    "description": "Obtiene las discusiones o hilos activos dentro de un foro.",
+    "params": {
+      "forumid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del foro"
+      },
+      "sortorder": {
+        "type": "int",
+        "required": false,
+        "description": "Ordenamiento de discusiones"
+      },
+      "page": {
+        "type": "int",
+        "required": false,
+        "description": "Número de página"
+      },
+      "perpage": {
+        "type": "int",
+        "required": false,
+        "description": "Cantidad por página"
+      }
+    },
+    "example": {
+      "forumid": 88
+    },
+    "notes": "Devuelve autor, asunto, conteo de respuestas y fechas."
+  },
+  "mod_forum_get_discussion_posts": {
+    "description": "Obtiene todos los mensajes y respuestas pertenecientes a una discusión de foro.",
+    "params": {
+      "discussionid": {
+        "type": "int",
+        "required": true,
+        "description": "ID de la discusión"
+      },
+      "sortby": {
+        "type": "string",
+        "required": false,
+        "description": "created | modified"
+      },
+      "sortdirection": {
+        "type": "string",
+        "required": false,
+        "description": "ASC | DESC"
+      }
+    },
+    "example": {
+      "discussionid": 105
+    },
+    "notes": "Incluye el contenido del mensaje en HTML y archivos adjuntos."
+  },
+  "mod_forum_add_discussion_post": {
+    "description": "Publica una nueva respuesta a un mensaje existente dentro de una discusión de foro.",
+    "params": {
+      "postid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del mensaje al que se responde"
+      },
+      "subject": {
+        "type": "string",
+        "required": true,
+        "description": "Asunto de la respuesta"
+      },
+      "message": {
+        "type": "string",
+        "required": true,
+        "description": "Cuerpo del mensaje en HTML"
+      },
+      "options": {
+        "type": "list",
+        "required": false,
+        "description": "Opciones adicionales como attachmentsid"
+      }
+    },
+    "example": {
+      "postid": 204,
+      "subject": "Re: Duda",
+      "message": "Mi respuesta"
+    },
+    "notes": "Publicación visible para todos los miembros del curso: confirmar con el usuario."
+  },
+  "mod_forum_add_discussion": {
+    "description": "Crea una nueva discusión o tema principal en un foro.",
+    "params": {
+      "forumid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del foro"
+      },
+      "subject": {
+        "type": "string",
+        "required": true,
+        "description": "Asunto del nuevo tema"
+      },
+      "message": {
+        "type": "string",
+        "required": true,
+        "description": "Contenido inicial del tema"
+      },
+      "groupid": {
+        "type": "int",
+        "required": false,
+        "description": "ID de grupo si el foro usa grupos separados"
+      },
+      "options": {
+        "type": "list",
+        "required": false,
+        "description": "Opciones como attachmentsid"
+      }
+    },
+    "example": {
+      "forumid": 88,
+      "subject": "Nuevo tema",
+      "message": "Texto del tema"
+    },
+    "notes": "Operación de escritura definitiva."
+  },
+  "core_message_get_conversations": {
+    "description": "Obtiene la lista de conversaciones de mensajería instantánea del usuario autenticado.",
+    "params": {
+      "userid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del usuario"
+      },
+      "type": {
+        "type": "int",
+        "required": false,
+        "description": "1 = individual, 2 = grupal, null = todas"
+      },
+      "limitnum": {
+        "type": "int",
+        "required": false,
+        "description": "Límite de resultados"
+      },
+      "limitfrom": {
+        "type": "int",
+        "required": false,
+        "description": "Desplazamiento para paginación"
+      }
+    },
+    "example": {
+      "userid": 10001,
+      "limitnum": 10
+    },
+    "notes": "Retorna lista de conversaciones con el último mensaje y participantes."
+  },
+  "core_message_get_conversation_messages": {
+    "description": "Obtiene los mensajes de una conversación específica entre usuarios.",
+    "params": {
+      "currentuserid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del usuario actual"
+      },
+      "convid": {
+        "type": "int",
+        "required": true,
+        "description": "ID de la conversación"
+      },
+      "limitnum": {
+        "type": "int",
+        "required": false,
+        "description": "Cantidad máxima de mensajes"
+      },
+      "limitfrom": {
+        "type": "int",
+        "required": false,
+        "description": "Desplazamiento para paginación"
+      },
+      "newest": {
+        "type": "bool",
+        "required": false,
+        "description": "Ordenar primero los más nuevos"
+      }
+    },
+    "example": {
+      "currentuserid": 10001,
+      "convid": 305,
+      "limitnum": 20
+    },
+    "notes": "Devuelve el historial cronológico de la conversación."
+  },
+  "core_message_send_instant_messages": {
+    "description": "Envía mensajes instantáneos directos a uno o varios destinatarios por userid.",
+    "params": {
+      "messages": {
+        "type": "list",
+        "required": true,
+        "description": "Lista de mensajes con touserid, text y clientmsgid"
+      }
+    },
+    "example": {
+      "messages": [
+        {
+          "touserid": 10002,
+          "text": "Hola"
+        }
+      ]
+    },
+    "notes": "Envía un mensaje privado directo. Requiere confirmación previa."
+  },
+  "core_message_send_messages_to_conversation": {
+    "description": "Envía un mensaje a una conversación específica existente.",
+    "params": {
+      "conversationid": {
+        "type": "int",
+        "required": true,
+        "description": "ID de la conversación"
+      },
+      "messages": {
+        "type": "list",
+        "required": true,
+        "description": "Lista de mensajes con text y textformat"
+      }
+    },
+    "example": {
+      "conversationid": 305,
+      "messages": [
+        {
+          "text": "Mensaje en conversación",
+          "textformat": 1
+        }
+      ]
+    },
+    "notes": "Operación de envío de mensajes."
+  },
+  "tool_mobile_get_autologin_key": {
+    "description": "Genera una clave de autologin de un solo uso para autenticar al usuario directamente en el navegador.",
+    "params": {
+      "privatetoken": {
+        "type": "string",
+        "required": true,
+        "description": "Token privado obtenido durante el login móvil"
+      }
+    },
+    "example": {
+      "privatetoken": "secret_priv_token"
+    },
+    "notes": "Genera una clave temporal para abrir Moodle en el navegador sin ingresar contraseña."
+  },
+  "mod_resource_get_resources_by_courses": {
+    "description": "Obtiene la lista de recursos de tipo archivo (recurso) para los cursos indicados.",
+    "params": {
+      "courseids": {
+        "type": "list",
+        "required": false,
+        "description": "Lista de IDs de cursos"
+      }
+    },
+    "example": {
+      "courseids": [
+        55
+      ]
+    },
+    "notes": "Devuelve nombres, descripciones y archivos de recursos adjuntos."
+  },
+  "mod_page_get_pages_by_courses": {
+    "description": "Obtiene la lista de páginas web informativas (módulo page) para los cursos indicados.",
+    "params": {
+      "courseids": {
+        "type": "list",
+        "required": false,
+        "description": "Lista de IDs de cursos"
+      }
+    },
+    "example": {
+      "courseids": [
+        55
+      ]
+    },
+    "notes": "Incluye el contenido HTML de cada página y archivos adjuntos."
+  },
+  "mod_url_get_urls_by_courses": {
+    "description": "Obtiene los enlaces web y URLs externas configurados como recursos en los cursos indicados.",
+    "params": {
+      "courseids": {
+        "type": "list",
+        "required": false,
+        "description": "Lista de IDs de cursos"
+      }
+    },
+    "example": {
+      "courseids": [
+        55
+      ]
+    },
+    "notes": "Retorna enlaces a reuniones de Meet, carpetas de Drive o páginas web externas."
+  },
+  "mod_folder_get_folders_by_courses": {
+    "description": "Obtiene la lista de carpetas de archivos (módulo folder) para los cursos indicados.",
+    "params": {
+      "courseids": {
+        "type": "list",
+        "required": false,
+        "description": "Lista de IDs de cursos"
+      }
+    },
+    "example": {
+      "courseids": [
+        55
+      ]
+    },
+    "notes": "Permite explorar los archivos contenidos dentro de cada carpeta del curso."
+  }
+}
