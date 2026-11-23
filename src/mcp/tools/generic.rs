@@ -8,7 +8,12 @@ use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+
+static CATALOG: LazyLock<Value> = LazyLock::new(|| {
+    let raw = include_str!("../../../catalog/functions.json");
+    serde_json::from_str(raw).expect("catalog/functions.json debe ser un JSON válido")
+});
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListFunctionsParams {
@@ -161,12 +166,24 @@ impl MoodleMcp {
         };
 
         let read_only = is_read_only(name);
+        let (signature, hint) = if let Some(sig) = CATALOG.get(name) {
+            (
+                Some(sig.clone()),
+                "Firma disponible en el catálogo".to_string(),
+            )
+        } else {
+            (
+                None,
+                "Para descubrir los parámetros esperados, invoca la función con moodle_read o moodle_call con parámetros vacíos y consulta el debuginfo de Moodle.".to_string(),
+            )
+        };
+
         let output = DescribeFunctionOutput {
             name: name.to_string(),
             enabled,
             read_only,
-            signature: None,
-            hint: "Para descubrir los parámetros esperados, invoca la función con moodle_read o moodle_call con parámetros vacíos y consulta el debuginfo de Moodle.".to_string(),
+            signature,
+            hint,
         };
 
         self.ctx.ok_json(&output, "moodle_describe_function")

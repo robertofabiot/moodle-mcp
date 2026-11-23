@@ -480,8 +480,8 @@ async fn test_describe_function_output() {
     assert_eq!(val["name"], "core_enrol_get_users_courses");
     assert_eq!(val["enabled"], true);
     assert_eq!(val["read_only"], true);
-    assert!(val["signature"].is_null());
-    assert!(val["hint"].is_string());
+    assert!(val["signature"].is_object());
+    assert_eq!(val["hint"], "Firma disponible en el catálogo");
 }
 
 #[tokio::test]
