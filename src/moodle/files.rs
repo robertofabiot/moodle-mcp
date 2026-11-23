@@ -179,10 +179,16 @@ impl FileClient {
     /// Inicializa un FileClient compartiendo el MoodleGate del MoodleClient original,
     /// con connect_timeout de 10s, read_timeout de 60s, sin timeout total y con DEFAULT_USER_AGENT.
     pub fn new(client: &MoodleClient) -> Self {
+        Self::with_read_timeout(client, Duration::from_secs(60))
+    }
+
+    /// Inicializa un FileClient compartiendo el MoodleGate del MoodleClient original
+    /// con un read_timeout personalizado.
+    pub fn with_read_timeout(client: &MoodleClient, read_timeout: Duration) -> Self {
         let reqwest_client = reqwest::Client::builder()
             .use_rustls_tls()
             .connect_timeout(Duration::from_secs(10))
-            .read_timeout(Duration::from_secs(60))
+            .read_timeout(read_timeout)
             .user_agent(DEFAULT_USER_AGENT)
             .referer(false)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -200,7 +206,10 @@ impl FileClient {
                 attempt.follow()
             }))
             .build()
-            .expect("Fallo al construir reqwest::Client para FileClient");
+            .unwrap_or_else(|e| {
+                tracing::error!("Fallo al construir reqwest::Client para FileClient: {e}");
+                reqwest::Client::new()
+            });
 
         Self {
             client: reqwest_client,

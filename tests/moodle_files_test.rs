@@ -652,8 +652,8 @@ async fn test_file_client_slow_transfer_success() {
             // Primer fragmento
             let _ = socket.write_all(b"5\r\nhello\r\n").await;
 
-            // Pausa mayor a 20 segundos entre fragmentos
-            tokio::time::sleep(std::time::Duration::from_secs(21)).await;
+            // Pausa breve entre fragmentos menor que read_timeout
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
             // Segundo fragmento y cierre
             let _ = socket.write_all(b"6\r\n world\r\n0\r\n\r\n").await;
@@ -665,7 +665,8 @@ async fn test_file_client_slow_transfer_success() {
     let gate = MoodleGate::new(4, 3).without_jitter();
     let moodle_client =
         MoodleClient::from_builder(MoodleClientBuilder::new().base_url(&base_uri).gate(gate));
-    let file_client = FileClient::new(&moodle_client);
+    let file_client =
+        FileClient::with_read_timeout(&moodle_client, std::time::Duration::from_millis(300));
 
     let file_url = Url::parse(&format!("{base_uri}/slow.txt")).unwrap();
 
