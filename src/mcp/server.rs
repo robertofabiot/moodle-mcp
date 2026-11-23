@@ -20,7 +20,8 @@ impl MoodleMcp {
             tool_router: Self::generic_router()
                 + Self::files_router()
                 + Self::sync_router()
-                + Self::courses_router(),
+                + Self::courses_router()
+                + Self::assignments_router(),
         }
     }
 

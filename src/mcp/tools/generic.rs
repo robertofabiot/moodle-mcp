@@ -12,7 +12,10 @@ use std::sync::{Arc, LazyLock};
 
 static CATALOG: LazyLock<Value> = LazyLock::new(|| {
     let raw = include_str!("../../../catalog/functions.json");
-    serde_json::from_str(raw).expect("catalog/functions.json debe ser un JSON válido")
+    serde_json::from_str(raw).unwrap_or_else(|e| {
+        tracing::error!("Fallo al parsear catalog/functions.json: {e}");
+        Value::Object(Map::new())
+    })
 });
 
 #[derive(Debug, Deserialize, JsonSchema)]

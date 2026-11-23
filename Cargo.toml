@@ -8,6 +8,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }   # sin "cookies"
 mime_guess = "2"
 htmd = "0.6"
+pulldown-cmark = "0.13"
+tempfile = "3"
 percent-encoding = "2"
 
 zeroize = { version = "1.8", features = ["derive"] }

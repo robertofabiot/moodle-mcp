@@ -113,6 +113,8 @@ En tu archivo de configuración de Claude Desktop:
 | `course_updates_since` | `courseid: int`, `since: int` | `read_only_hint = true` | Consulta las actualizaciones o cambios producidos en los módulos de un curso desde un timestamp Unix epoch. |
 | `get_grades` | `courseid?: int` | `read_only_hint = true` | Obtiene el resumen de notas globales entre cursos o el desglose detallado de actividades evaluables de un curso específico. |
 | `upcoming_events` | `days?: int` | `read_only_hint = true` | Consulta las próximas fechas límites de entrega y eventos del calendario del estudiante (por defecto 14 días). |
+| `get_assignment` | `cmid?: int`, `assignid?: int` | `read_only_hint = true` | Consulta los detalles de una tarea: enunciado en Markdown, archivos de consigna, configuración de entrega, fechas límites y estado/calificación del alumno. |
+| `submit_assignment` | `cmid?: int`, `assignid?: int`, `files?: string[]`, `onlinetext?: string`, `onlinetext_format?: string`, `keep_existing_files?: bool`, `final?: bool` | `destructive_hint = true` | Guarda o envía una entrega de tarea con archivos locales y/o texto en línea, con opción de conservar archivos previos y envío definitivo a calificación. |
 
 ---
 
