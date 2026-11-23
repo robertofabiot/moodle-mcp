@@ -21,6 +21,7 @@ pub struct TestContext {
 }
 
 impl TestContext {
+    #[allow(dead_code)]
     pub async fn with_options(
         mock: &MockServer,
         initial_token: Option<&str>,

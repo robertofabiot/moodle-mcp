@@ -5,6 +5,7 @@ pub mod client;
 pub mod courses;
 pub mod envelope;
 pub mod error;
+pub mod files;
 pub mod gate;
 pub mod metrics;
 pub mod params;
@@ -18,6 +19,7 @@ pub use client::{MoodleClient, MoodleClientBuilder, DEFAULT_BASE_URL, DEFAULT_US
 pub use courses::{ModuleInfo, MoodleAssignment, MoodleCourse};
 pub use envelope::decode_envelope;
 pub use error::{MoodleError, Result};
+pub use files::{authorize_file_url, sanitize_filename, DownloadedFile, FileClient, UploadResult};
 pub use gate::{GatePermit, MoodleGate, Priority};
 pub use metrics::{RequestCounters, RequestCounts};
 pub use params::flatten_params;
