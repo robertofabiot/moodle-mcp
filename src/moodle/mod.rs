@@ -24,7 +24,7 @@ pub use envelope::decode_envelope;
 pub use error::{MoodleError, Result};
 pub use files::{authorize_file_url, sanitize_filename, DownloadedFile, FileClient, UploadResult};
 pub use gate::{GatePermit, MoodleGate, Priority};
-pub use ids::{resolve_cmid, resolve_instance, CourseModuleRef};
+pub use ids::{resolve_cmid, resolve_instance, resolve_module, CourseModuleRef};
 pub use metrics::{RequestCounters, RequestCounts};
 pub use params::flatten_params;
 pub use submissions::{strip_html_to_plain_text, SubmissionStatus};
