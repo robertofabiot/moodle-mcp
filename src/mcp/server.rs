@@ -17,7 +17,7 @@ impl MoodleMcp {
     pub fn new(ctx: Arc<AppContext>) -> Self {
         Self {
             ctx,
-            tool_router: Self::generic_router() + Self::files_router(),
+            tool_router: Self::generic_router() + Self::files_router() + Self::sync_router(),
         }
     }
 
