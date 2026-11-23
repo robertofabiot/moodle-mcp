@@ -49,13 +49,10 @@ impl MoodleMcp {
         .await
         {
             Ok(r) => r,
-            Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                return self.ctx.invalid_token_error().await;
-            }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
-        self.ctx.ok_json(&result, "moodle_sync_course")
+        self.ctx.ok_json(&result, "moodle_sync_course", Some(&creds))
     }
 }

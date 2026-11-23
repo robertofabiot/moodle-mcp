@@ -67,13 +67,14 @@ impl MoodleMcp {
                     None,
                     None,
                     None,
+                    Some(&creds),
                 );
             }
         };
 
         let authorized_url = match authorize_file_url(&base_url, &params.0.url, &creds.token) {
             Ok(u) => u,
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
         let dest_path = params.0.dest.as_deref().map(Path::new);
@@ -86,10 +87,9 @@ impl MoodleMcp {
         {
             Ok(df) => df,
             Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                return self.ctx.invalid_token_error().await;
+                return self.ctx.handle_invalid_token().await;
             }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
         let mut content_markdown = None;
@@ -113,7 +113,7 @@ impl MoodleMcp {
             content_markdown,
         };
 
-        self.ctx.ok_json(&output, "moodle_download")
+        self.ctx.ok_json(&output, "moodle_download", Some(&creds))
     }
 
     /// Sube uno o más archivos locales al área de borrador de Moodle para entregas o foros.
@@ -135,6 +135,7 @@ impl MoodleMcp {
                 None,
                 None,
                 None,
+                Some(&creds),
             );
         }
 
@@ -147,6 +148,7 @@ impl MoodleMcp {
                     None,
                     None,
                     None,
+                    Some(&creds),
                 );
             }
         };
@@ -161,10 +163,9 @@ impl MoodleMcp {
         {
             Ok(res) => res,
             Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                return self.ctx.invalid_token_error().await;
+                return self.ctx.handle_invalid_token().await;
             }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
         let output = UploadOutput {
@@ -172,6 +173,6 @@ impl MoodleMcp {
             files: upload_result.files,
         };
 
-        self.ctx.ok_json(&output, "moodle_upload")
+        self.ctx.ok_json(&output, "moodle_upload", Some(&creds))
     }
 }

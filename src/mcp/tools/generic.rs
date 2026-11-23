@@ -94,10 +94,9 @@ impl MoodleMcp {
                 arc_info
             }
             Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                return self.ctx.invalid_token_error().await;
+                return self.ctx.handle_invalid_token().await;
             }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
         let function_count = site_info.functions.as_ref().map(|f| f.len()).unwrap_or(0);
@@ -112,7 +111,7 @@ impl MoodleMcp {
             function_count,
         };
 
-        self.ctx.ok_json(&output, "moodle_whoami")
+        self.ctx.ok_json(&output, "moodle_whoami", Some(&creds))
     }
 
     /// Lista las funciones del web service de Moodle habilitadas para el usuario autenticado.
@@ -125,6 +124,11 @@ impl MoodleMcp {
         &self,
         params: Parameters<ListFunctionsParams>,
     ) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => Some(c),
+            Err(err) => return err,
+        };
+
         let functions = match self.ctx.get_enabled_functions().await {
             Ok(f) => f,
             Err(err) => return err,
@@ -146,7 +150,8 @@ impl MoodleMcp {
             })
             .collect();
 
-        self.ctx.ok_json(&items, "moodle_list_functions")
+        self.ctx
+            .ok_json(&items, "moodle_list_functions", creds.as_deref())
     }
 
     /// Describe una función del web service de Moodle.
@@ -159,6 +164,8 @@ impl MoodleMcp {
         &self,
         params: Parameters<DescribeFunctionParams>,
     ) -> CallToolResult {
+        let creds = self.ctx.session().await.ok();
+
         let name = params.0.name.trim();
         let enabled = match self.ctx.is_function_enabled(name).await {
             Ok(e) => e,
@@ -186,7 +193,8 @@ impl MoodleMcp {
             hint,
         };
 
-        self.ctx.ok_json(&output, "moodle_describe_function")
+        self.ctx
+            .ok_json(&output, "moodle_describe_function", creds.as_deref())
     }
 
     /// Invoca una función de solo lectura del web service de Moodle.
@@ -213,6 +221,7 @@ impl MoodleMcp {
                     None,
                     None,
                     None,
+                    Some(&creds),
                 );
             }
             Err(err) => return err,
@@ -226,6 +235,7 @@ impl MoodleMcp {
                 None,
                 None,
                 Some("Usa moodle_call para ejecutar funciones de escritura o mutación".to_string()),
+                Some(&creds),
             );
         }
 
@@ -238,12 +248,9 @@ impl MoodleMcp {
             .call_raw(&creds.token, function, call_params)
             .await
         {
-            Ok(data) => self.ctx.ok_json(&data, function),
-            Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                self.ctx.invalid_token_error().await
-            }
-            Err(e) => self.ctx.tool_error_from_moodle(&e),
+            Ok(data) => self.ctx.ok_json(&data, function, Some(&creds)),
+            Err(MoodleError::InvalidToken) => self.ctx.handle_invalid_token().await,
+            Err(e) => self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         }
     }
 
@@ -271,6 +278,7 @@ impl MoodleMcp {
                     None,
                     None,
                     None,
+                    Some(&creds),
                 );
             }
             Err(err) => return err,
@@ -287,12 +295,9 @@ impl MoodleMcp {
         let empty_params = Map::new();
         let call_params = params.0.params.as_ref().unwrap_or(&empty_params);
         match client.call_raw(&creds.token, function, call_params).await {
-            Ok(data) => self.ctx.ok_json(&data, function),
-            Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                self.ctx.invalid_token_error().await
-            }
-            Err(e) => self.ctx.tool_error_from_moodle(&e),
+            Ok(data) => self.ctx.ok_json(&data, function, Some(&creds)),
+            Err(MoodleError::InvalidToken) => self.ctx.handle_invalid_token().await,
+            Err(e) => self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         }
     }
 }

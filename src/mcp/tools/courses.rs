@@ -233,11 +233,8 @@ impl MoodleMcp {
             .await
         {
             Ok(c) => c,
-            Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                return self.ctx.invalid_token_error().await;
-            }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
         let now = Utc::now().timestamp();
@@ -258,7 +255,7 @@ impl MoodleMcp {
             })
             .collect();
 
-        self.ctx.ok_json(&items, "list_courses")
+        self.ctx.ok_json(&items, "list_courses", Some(&creds))
     }
 
     /// Obtiene el árbol detallado de secciones y módulos de un curso con resúmenes convertidos a Markdown.
@@ -280,11 +277,8 @@ impl MoodleMcp {
             .await
         {
             Ok(s) => s,
-            Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                return self.ctx.invalid_token_error().await;
-            }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
         let base_url = Url::parse(self.ctx.client.base_url()).ok();
@@ -351,7 +345,7 @@ impl MoodleMcp {
             })
             .collect();
 
-        self.ctx.ok_json(&detail_sections, "get_course")
+        self.ctx.ok_json(&detail_sections, "get_course", Some(&creds))
     }
 
     /// Comprueba si ha habido cambios o actualizaciones en los módulos de un curso desde un momento específico.
@@ -386,14 +380,11 @@ impl MoodleMcp {
             .await
         {
             Ok(u) => u,
-            Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                return self.ctx.invalid_token_error().await;
-            }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
-        self.ctx.ok_json(&updates, "course_updates_since")
+        self.ctx.ok_json(&updates, "course_updates_since", Some(&creds))
     }
 
     /// Obtiene las calificaciones globales del estudiante o el desglose detallado de un curso.
@@ -430,7 +421,7 @@ impl MoodleMcp {
                         self.ctx.invalidate_session().await;
                         return self.ctx.invalid_token_error().await;
                     }
-                    Err(e) => return self.ctx.tool_error_from_moodle(&e),
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
                 };
 
                 let items: Vec<GradeItemOutput> = resp
@@ -448,7 +439,7 @@ impl MoodleMcp {
                     })
                     .collect();
 
-                self.ctx.ok_json(&items, "get_grades")
+                self.ctx.ok_json(&items, "get_grades", Some(&creds))
             }
             Some(courseid) => {
                 let courseid_str = courseid.to_string();
@@ -471,7 +462,7 @@ impl MoodleMcp {
                         self.ctx.invalidate_session().await;
                         return self.ctx.invalid_token_error().await;
                     }
-                    Err(e) => return self.ctx.tool_error_from_moodle(&e),
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
                 };
 
                 let mut items = Vec::new();
@@ -508,7 +499,7 @@ impl MoodleMcp {
                     }
                 }
 
-                self.ctx.ok_json(&items, "get_grades")
+                self.ctx.ok_json(&items, "get_grades", Some(&creds))
             }
         }
     }
@@ -551,11 +542,8 @@ impl MoodleMcp {
             .await
         {
             Ok(r) => r,
-            Err(MoodleError::InvalidToken) => {
-                self.ctx.invalidate_session().await;
-                return self.ctx.invalid_token_error().await;
-            }
-            Err(e) => return self.ctx.tool_error_from_moodle(&e),
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
         let items: Vec<UpcomingEventOutput> = resp
@@ -579,6 +567,6 @@ impl MoodleMcp {
             })
             .collect();
 
-        self.ctx.ok_json(&items, "upcoming_events")
+        self.ctx.ok_json(&items, "upcoming_events", Some(&creds))
     }
 }
