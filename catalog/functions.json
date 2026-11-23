@@ -42,6 +42,16 @@
         "type": "list",
         "required": false,
         "description": "Opciones de filtrado (ej. excluir módulos, incluir solo visibles)"
+      },
+      "options[].name": {
+        "type": "string",
+        "required": false,
+        "description": "Nombre de la opción (ej. excludemodules, excludecontents, sectionid, sectionnumber, cmid)"
+      },
+      "options[].value": {
+        "type": "string",
+        "required": false,
+        "description": "Valor de la opción"
       }
     },
     "example": {
@@ -179,6 +189,11 @@
         "type": "int",
         "required": false,
         "description": "ID del usuario a consultar"
+      },
+      "searchvalue": {
+        "type": "string",
+        "required": false,
+        "description": "Texto para filtrar eventos por nombre"
       }
     },
     "example": {
@@ -400,6 +415,16 @@
         "type": "bool",
         "required": false,
         "description": "Forzar la creación de un nuevo intento si ya existía uno incompleto"
+      },
+      "preflightdata[].name": {
+        "type": "string",
+        "required": false,
+        "description": "Nombre del dato de preflight (ej. quizpassword)"
+      },
+      "preflightdata[].value": {
+        "type": "string",
+        "required": false,
+        "description": "Valor del dato de preflight"
       }
     },
     "example": {
@@ -425,6 +450,16 @@
         "type": "list",
         "required": false,
         "description": "Datos de preflight como contraseñas"
+      },
+      "preflightdata[].name": {
+        "type": "string",
+        "required": false,
+        "description": "Nombre del dato de preflight (ej. quizpassword)"
+      },
+      "preflightdata[].value": {
+        "type": "string",
+        "required": false,
+        "description": "Valor del dato de preflight"
       }
     },
     "example": {
@@ -450,6 +485,26 @@
         "type": "list",
         "required": false,
         "description": "Datos de preflight opcionales"
+      },
+      "data[].name": {
+        "type": "string",
+        "required": true,
+        "description": "Nombre de la variable de datos (ej. q10:1_answer)"
+      },
+      "data[].value": {
+        "type": "string",
+        "required": true,
+        "description": "Valor de la respuesta o token de secuencia"
+      },
+      "preflightdata[].name": {
+        "type": "string",
+        "required": false,
+        "description": "Nombre del dato de preflight (ej. quizpassword)"
+      },
+      "preflightdata[].value": {
+        "type": "string",
+        "required": false,
+        "description": "Valor del dato de preflight"
       }
     },
     "example": {
@@ -485,6 +540,21 @@
         "type": "bool",
         "required": false,
         "description": "true si el tiempo límite del cuestionario expiró"
+      },
+      "preflightdata": {
+        "type": "list",
+        "required": false,
+        "description": "Datos de preflight opcionales (ej. contraseña del cuestionario)"
+      },
+      "preflightdata[].name": {
+        "type": "string",
+        "required": false,
+        "description": "Nombre del dato de preflight (ej. quizpassword)"
+      },
+      "preflightdata[].value": {
+        "type": "string",
+        "required": false,
+        "description": "Valor del dato de preflight"
       }
     },
     "example": {
@@ -505,6 +575,16 @@
         "type": "list",
         "required": false,
         "description": "Datos de preflight"
+      },
+      "preflightdata[].name": {
+        "type": "string",
+        "required": false,
+        "description": "Nombre del dato de preflight (ej. quizpassword)"
+      },
+      "preflightdata[].value": {
+        "type": "string",
+        "required": false,
+        "description": "Valor del dato de preflight"
       }
     },
     "example": {
@@ -570,6 +650,12 @@
         "type": "int",
         "required": false,
         "description": "Cantidad por página"
+      },
+      "groupid": {
+        "type": "int",
+        "required": false,
+        "default": 0,
+        "description": "ID del grupo (0 para todos los grupos o sin grupos)"
       }
     },
     "example": {
@@ -594,6 +680,12 @@
         "type": "string",
         "required": false,
         "description": "ASC | DESC"
+      },
+      "includeinlineattachments": {
+        "type": "bool",
+        "required": false,
+        "default": false,
+        "description": "Si es true, incluye los archivos adjuntos inline en los mensajes"
       }
     },
     "example": {
@@ -623,6 +715,22 @@
         "type": "list",
         "required": false,
         "description": "Opciones adicionales como attachmentsid"
+      },
+      "messageformat": {
+        "type": "int",
+        "required": false,
+        "default": 1,
+        "description": "Formato del mensaje (1 = FORMAT_HTML)"
+      },
+      "options[].name": {
+        "type": "string",
+        "required": false,
+        "description": "Nombre de la opción (ej. attachmentsid, discussiontopic, private)"
+      },
+      "options[].value": {
+        "type": "string",
+        "required": false,
+        "description": "Valor de la opción"
       }
     },
     "example": {
@@ -659,6 +767,16 @@
         "type": "list",
         "required": false,
         "description": "Opciones como attachmentsid"
+      },
+      "options[].name": {
+        "type": "string",
+        "required": false,
+        "description": "Nombre de la opción (ej. attachmentsid, pinned)"
+      },
+      "options[].value": {
+        "type": "string",
+        "required": false,
+        "description": "Valor de la opción"
       }
     },
     "example": {
@@ -690,6 +808,16 @@
         "type": "int",
         "required": false,
         "description": "Desplazamiento para paginación"
+      },
+      "favourites": {
+        "type": "bool",
+        "required": false,
+        "description": "Filtrar por conversaciones favoritas"
+      },
+      "mergeself": {
+        "type": "bool",
+        "required": false,
+        "description": "Incluir conversación con uno mismo"
       }
     },
     "example": {
@@ -725,6 +853,11 @@
         "type": "bool",
         "required": false,
         "description": "Ordenar primero los más nuevos"
+      },
+      "timefrom": {
+        "type": "int",
+        "required": false,
+        "description": "Timestamp Unix a partir del cual obtener mensajes"
       }
     },
     "example": {
@@ -741,6 +874,26 @@
         "type": "list",
         "required": true,
         "description": "Lista de mensajes con touserid, text y clientmsgid"
+      },
+      "messages[].touserid": {
+        "type": "int",
+        "required": true,
+        "description": "ID del usuario destinatario"
+      },
+      "messages[].text": {
+        "type": "string",
+        "required": true,
+        "description": "Texto del mensaje"
+      },
+      "messages[].textformat": {
+        "type": "int",
+        "required": false,
+        "description": "Formato del texto (1 = FORMAT_HTML, 0 = FORMAT_MOODLE, etc.)"
+      },
+      "messages[].clientmsgid": {
+        "type": "string",
+        "required": false,
+        "description": "ID opcional del mensaje en el cliente para rastreo"
       }
     },
     "example": {
@@ -765,6 +918,16 @@
         "type": "list",
         "required": true,
         "description": "Lista de mensajes con text y textformat"
+      },
+      "messages[].text": {
+        "type": "string",
+        "required": true,
+        "description": "Texto del mensaje"
+      },
+      "messages[].textformat": {
+        "type": "int",
+        "required": false,
+        "description": "Formato del texto (1 = FORMAT_HTML)"
       }
     },
     "example": {
