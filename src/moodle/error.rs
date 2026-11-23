@@ -42,6 +42,10 @@ pub enum MoodleError {
     /// Argumentos inválidos proporcionados por el usuario o cliente.
     #[error("Argumentos inválidos: {0}")]
     InvalidArguments(String),
+
+    /// Error de entrada/salida local al interactuar con el sistema de archivos.
+    #[error("Error de E/S: {0}")]
+    Io(String),
 }
 
 impl MoodleError {
@@ -78,5 +82,11 @@ impl From<reqwest::Error> for MoodleError {
         } else {
             MoodleError::Network(err.to_string())
         }
+    }
+}
+
+impl From<std::io::Error> for MoodleError {
+    fn from(err: std::io::Error) -> Self {
+        MoodleError::Io(err.to_string())
     }
 }

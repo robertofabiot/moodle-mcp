@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }   # sin "cookies"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std", "fs", "io-util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }   # sin "cookies"
+mime_guess = "2"
+htmd = "0.6"
+percent-encoding = "2"
 
 zeroize = { version = "1.8", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
