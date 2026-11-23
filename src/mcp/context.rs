@@ -24,6 +24,8 @@ pub struct AppContext {
     pub client: MoodleClient,
     /// Cliente HTTP para operaciones de escritura (con 0 reintentos para evitar duplicación).
     pub write_client: MoodleClient,
+    /// Cliente HTTP especializado en transferencia de archivos (pluginfile y upload.php).
+    pub file_client: crate::moodle::files::FileClient,
     /// Almacén de credenciales para resolución bajo demanda.
     pub store: CredentialStore,
     /// Credenciales del usuario autenticado si hay sesión activa.
@@ -39,10 +41,12 @@ impl AppContext {
     /// `write_client` se inicializa con `client.with_max_retries(0)`.
     pub fn new(config: Config, client: MoodleClient, store: CredentialStore) -> Self {
         let write_client = client.with_max_retries(0);
+        let file_client = crate::moodle::files::FileClient::new(&client);
         Self {
             config,
             client,
             write_client,
+            file_client,
             store,
             session: RwLock::new(None),
             site_info: RwLock::new(None),
@@ -58,11 +62,13 @@ impl AppContext {
         credentials: Option<Credentials>,
     ) -> Self {
         let write_client = client.with_max_retries(0);
+        let file_client = crate::moodle::files::FileClient::new(&client);
         let has_creds = credentials.is_some();
         Self {
             config,
             client,
             write_client,
+            file_client,
             store,
             session: RwLock::new(credentials.map(Arc::new)),
             site_info: RwLock::new(None),

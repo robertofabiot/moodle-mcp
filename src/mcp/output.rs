@@ -240,6 +240,7 @@ pub fn tool_error_from_moodle(
             None,
         ),
         MoodleError::InvalidArguments(msg) => ("invalid_arguments", msg.clone(), None, None, None),
+        MoodleError::Io(msg) => ("io", format!("Error de E/S: {msg}"), None, None, None),
     };
 
     tool_error(
