@@ -1,5 +1,6 @@
 use crate::content::{html_to_markdown, markdown_to_html, plain_text_to_html};
 use crate::mcp::server::MoodleMcp;
+use crate::mcp::tools::{extract_warnings, format_epoch_iso};
 use crate::moodle::error::MoodleError;
 use crate::moodle::files::authorize_file_url;
 use crate::moodle::gate::Priority;
@@ -263,14 +264,6 @@ struct SubmissionGradeRaw {
     timemodified: Option<i64>,
 }
 
-fn format_epoch_iso(epoch: i64) -> Option<String> {
-    if epoch > 0 {
-        chrono::DateTime::from_timestamp(epoch, 0).map(|dt| dt.to_rfc3339())
-    } else {
-        None
-    }
-}
-
 fn parse_submission_types(configs: Option<&[AssignConfigRaw]>) -> AssignmentSubmissionTypes {
     let mut file_config = None;
     let mut onlinetext_config = None;
@@ -504,32 +497,6 @@ fn parse_grade_and_feedback(
     }
 
     (grade_info, feedback_markdown)
-}
-
-fn extract_warnings(val: &serde_json::Value) -> Option<String> {
-    let mut warnings = Vec::new();
-    if let Some(arr) = val.as_array() {
-        for item in arr {
-            if let Some(msg) = item.get("message").and_then(|m| m.as_str()) {
-                warnings.push(msg.to_string());
-            } else if let Some(code) = item.get("warningcode").and_then(|c| c.as_str()) {
-                warnings.push(code.to_string());
-            }
-        }
-    } else if let Some(arr) = val.get("warnings").and_then(|w| w.as_array()) {
-        for item in arr {
-            if let Some(msg) = item.get("message").and_then(|m| m.as_str()) {
-                warnings.push(msg.to_string());
-            } else if let Some(code) = item.get("warningcode").and_then(|c| c.as_str()) {
-                warnings.push(code.to_string());
-            }
-        }
-    }
-    if warnings.is_empty() {
-        None
-    } else {
-        Some(warnings.join("; "))
-    }
 }
 
 #[tool_router(router = assignments_router, vis = "pub(crate)")]
