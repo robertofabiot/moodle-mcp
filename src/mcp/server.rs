@@ -21,7 +21,8 @@ impl MoodleMcp {
                 + Self::files_router()
                 + Self::sync_router()
                 + Self::courses_router()
-                + Self::assignments_router(),
+                + Self::assignments_router()
+                + Self::quiz_router(),
         }
     }
 

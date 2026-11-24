@@ -1,0 +1,388 @@
+mod common;
+
+use common::start_server;
+use rmcp::model::CallToolRequestParams;
+use serde_json::json;
+use std::collections::HashMap;
+use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+const FIXTURE_QUIZ_LIST: &str = include_str!("fixtures/quiz_list.json");
+const FIXTURE_QUIZ_ACCESS_INFO: &str = include_str!("fixtures/quiz_access_info.json");
+const FIXTURE_QUIZ_ATTEMPTS: &str = include_str!("fixtures/quiz_attempts.json");
+const FIXTURE_QUIZ_REVIEW: &str = include_str!("fixtures/quiz_review.json");
+
+fn cmid_response(cmid: i64, instance: i64, course: i64, modname: &str, name: &str) -> String {
+    json!({
+        "cm": {
+            "id": cmid,
+            "instance": instance,
+            "course": course,
+            "modname": modname,
+            "name": name,
+        }
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn test_quiz_tools_annotations() {
+    let mock = MockServer::start().await;
+    let client = start_server(&mock).await;
+
+    let tools = client.list_all_tools().await.expect("list_all_tools");
+    let tool_map: HashMap<String, _> = tools.into_iter().map(|t| (t.name.to_string(), t)).collect();
+
+    // 1. quiz_info: read_only_hint = true
+    let info = tool_map
+        .get("quiz_info")
+        .expect("quiz_info debe estar registrada");
+    let info_ann = info.annotations.as_ref().expect("annotations de quiz_info");
+    assert_eq!(info_ann.read_only_hint, Some(true));
+
+    // 2. quiz_review: read_only_hint = true
+    let review = tool_map
+        .get("quiz_review")
+        .expect("quiz_review debe estar registrada");
+    let review_ann = review
+        .annotations
+        .as_ref()
+        .expect("annotations de quiz_review");
+    assert_eq!(review_ann.read_only_hint, Some(true));
+}
+
+#[tokio::test]
+async fn test_quiz_info_by_cmid_and_by_quizid_identical() {
+    let mock = MockServer::start().await;
+
+    // 1. Resolver por cmid
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module",
+        ))
+        .and(body_string_contains("cmid=979333"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cmid_response(
+            979333,
+            68822,
+            8233,
+            "quiz",
+            "Cuestionario de Evaluación 1",
+        )))
+        .mount(&mock)
+        .await;
+
+    // 2. Resolver por quizid (instance)
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module_by_instance",
+        ))
+        .and(body_string_contains("module=quiz"))
+        .and(body_string_contains("instance=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cmid_response(
+            979333,
+            68822,
+            8233,
+            "quiz",
+            "Cuestionario de Evaluación 1",
+        )))
+        .mount(&mock)
+        .await;
+
+    // 3. mod_quiz_get_quizzes_by_courses
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_quizzes_by_courses",
+        ))
+        .and(body_string_contains("8233"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_LIST))
+        .mount(&mock)
+        .await;
+
+    // 4. mod_quiz_get_quiz_access_information
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_quiz_access_information",
+        ))
+        .and(body_string_contains("quizid=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_ACCESS_INFO))
+        .mount(&mock)
+        .await;
+
+    // 5. mod_quiz_get_user_attempts
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_user_attempts",
+        ))
+        .and(body_string_contains("quizid=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_ATTEMPTS))
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    // Llamada por cmid
+    let res_cmid = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_info")
+                .with_arguments(json!({ "cmid": 979333 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool por cmid");
+    assert!(!res_cmid.is_error.unwrap_or(false));
+    let text_cmid = res_cmid.content[0].as_text().unwrap();
+    let val_cmid: serde_json::Value = serde_json::from_str(&text_cmid.text).unwrap();
+
+    // Llamada por quizid
+    let res_quizid = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_info")
+                .with_arguments(json!({ "quizid": 68822 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool por quizid");
+    assert!(!res_quizid.is_error.unwrap_or(false));
+    let text_quizid = res_quizid.content[0].as_text().unwrap();
+    let val_quizid: serde_json::Value = serde_json::from_str(&text_quizid.text).unwrap();
+
+    // Validar identidad entre ambas respuestas
+    assert_eq!(val_cmid, val_quizid);
+
+    // Validar campos retornados
+    assert_eq!(val_cmid["cmid"], 979333);
+    assert_eq!(val_cmid["instance"], 68822);
+    assert_eq!(val_cmid["courseid"], 8233);
+    assert_eq!(val_cmid["name"], "Cuestionario de Evaluación 1");
+    assert!(val_cmid["intro_markdown"]
+        .as_str()
+        .unwrap()
+        .contains("Bienvenido al cuestionario"));
+    assert_eq!(val_cmid["timeopen"], 1700000000);
+    assert_eq!(val_cmid["timeclose"], 1700003600);
+    assert_eq!(val_cmid["timelimit"], 3600);
+    assert_eq!(val_cmid["attempts"], 2);
+    assert_eq!(val_cmid["grademethod"], 1);
+    assert_eq!(val_cmid["requires_seb"], true);
+    assert_eq!(val_cmid["requires_password"], true);
+
+    let attempts = val_cmid["attempts_history"].as_array().unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0]["attemptid"], 101);
+    assert_eq!(attempts[0]["state"], "finished");
+    assert_eq!(attempts[0]["sumgrades"], 9.5);
+    assert_eq!(attempts[0]["timestart"], 1700000100);
+    assert_eq!(attempts[0]["timefinish"], 1700001800);
+}
+
+#[tokio::test]
+async fn test_quiz_info_both_or_neither_cmid_quizid_returns_invalid_arguments() {
+    let mock = MockServer::start().await;
+    let client = start_server(&mock).await;
+
+    // Caso 1: Ambos suministrados
+    let res_both = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_info").with_arguments(
+                json!({ "cmid": 979333, "quizid": 68822 })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("call_tool con ambos");
+    assert!(res_both.is_error.unwrap_or(false));
+    let err_both: serde_json::Value =
+        serde_json::from_str(&res_both.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(err_both["error"]["kind"], "invalid_arguments");
+
+    // Caso 2: Ninguno suministrado
+    let res_none = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_info")
+                .with_arguments(json!({}).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool sin argumentos");
+    assert!(res_none.is_error.unwrap_or(false));
+    let err_none: serde_json::Value =
+        serde_json::from_str(&res_none.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(err_none["error"]["kind"], "invalid_arguments");
+}
+
+#[tokio::test]
+async fn test_quiz_info_seb_and_password_false_when_absent() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cmid_response(
+            979333,
+            68822,
+            8233,
+            "quiz",
+            "Cuestionario Abierto",
+        )))
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_quizzes_by_courses",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_LIST))
+        .mount(&mock)
+        .await;
+
+    // Reglas de acceso sin SEB ni contraseña
+    let access_info_no_seb = json!({
+        "accessrules": [],
+        "preventaccessreasons": [],
+        "activerulenames": ["quizaccess_numattempts"],
+        "warnings": []
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_quiz_access_information",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(access_info_no_seb.to_string()))
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_user_attempts",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_ATTEMPTS))
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_info")
+                .with_arguments(json!({ "cmid": 979333 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool quiz_info");
+
+    assert!(!res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(val["requires_seb"], false);
+    assert_eq!(val["requires_password"], false);
+}
+
+#[tokio::test]
+async fn test_quiz_review_success() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_attempt_review",
+        ))
+        .and(body_string_contains("attemptid=101"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_REVIEW))
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_review")
+                .with_arguments(json!({ "attemptid": 101 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool quiz_review");
+
+    assert!(!res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["attemptid"], 101);
+    assert_eq!(val["state"], "finished");
+    assert_eq!(val["grade"], 9.5);
+
+    let questions = val["questions"].as_array().unwrap();
+    assert_eq!(questions.len(), 1);
+    let q = &questions[0];
+    assert_eq!(q["slot"], 1);
+    assert_eq!(q["number"], "1");
+    assert_eq!(q["type"], "multichoice");
+    assert_eq!(q["status"], "Correcta");
+    assert_eq!(q["state"], "gradedright");
+    assert_eq!(q["mark"], "1.00");
+    assert_eq!(q["maxmark"], "1.00000");
+    assert!(q["text_markdown"]
+        .as_str()
+        .unwrap()
+        .contains("capital de Nicaragua"));
+
+    let inputs = q["inputs"].as_array().unwrap();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0]["name"], "q101:1_answer");
+    assert_eq!(inputs[0]["kind"], "single");
+    assert_eq!(inputs[0]["current"], "1");
+    let opts = inputs[0]["options"].as_array().unwrap();
+    assert_eq!(opts.len(), 2);
+    assert_eq!(opts[0]["value"], "0");
+    assert_eq!(opts[0]["label"], "a. San José");
+    assert_eq!(opts[1]["value"], "1");
+    assert_eq!(opts[1]["label"], "b. Managua");
+
+    assert_eq!(q["feedback_markdown"], "Respuesta correcta");
+    assert_eq!(q["hidden_fields"]["q101:1_:sequencecheck"], "1");
+}
+
+#[tokio::test]
+async fn test_quiz_scrubs_token_in_error() {
+    let mock = MockServer::start().await;
+
+    let error_response = json!({
+        "exception": "moodle_exception",
+        "errorcode": "invalidparameter",
+        "message": "Parámetro inválido",
+        "debuginfo": "Falló validación con token tok123 y sesión activa"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_attempt_review",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(error_response.to_string()))
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_review")
+                .with_arguments(json!({ "attemptid": 101 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool quiz_review con error");
+
+    assert!(res.is_error.unwrap_or(false));
+    let raw_text = &res.content[0].as_text().unwrap().text;
+
+    // El token no debe aparecer en claro
+    assert!(!raw_text.contains("tok123"));
+    // Debe haber sido sanitizado a <token>
+    assert!(raw_text.contains("<token>"));
+}

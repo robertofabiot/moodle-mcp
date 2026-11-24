@@ -1,0 +1,12 @@
+{
+  "accessrules": [
+    "Este cuestionario requiere Safe Exam Browser",
+    "Se requiere contraseña para contestar este cuestionario"
+  ],
+  "preventaccessreasons": [],
+  "activerulenames": [
+    "quizaccess_seb",
+    "quizaccess_password"
+  ],
+  "warnings": []
+}

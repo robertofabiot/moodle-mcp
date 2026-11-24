@@ -1,0 +1,26 @@
+{
+  "attempt": {
+    "id": 101,
+    "quiz": 68822,
+    "userid": 10001,
+    "attempt": 1,
+    "sumgrades": 9.5,
+    "state": "finished",
+    "timestart": 1700000100,
+    "timefinish": 1700001800
+  },
+  "grade": 9.5,
+  "questions": [
+    {
+      "slot": 1,
+      "type": "multichoice",
+      "number": 1,
+      "status": "Correcta",
+      "state": "gradedright",
+      "mark": "1.00",
+      "maxmark": "1.00000",
+      "html": "<div class=\"que multichoice deferredfeedback notyetanswered\"><div class=\"qtext\"><p>¿Cuál es la capital de Nicaragua?</p></div><div class=\"ablock\"><div class=\"answer\"><div class=\"r0\"><input type=\"radio\" name=\"q101:1_answer\" value=\"0\" id=\"q101_1_answer0\" /><label for=\"q101_1_answer0\"><span class=\"answernumber\">a. </span>San José</label></div><div class=\"r1\"><input type=\"radio\" name=\"q101:1_answer\" value=\"1\" id=\"q101_1_answer1\" checked=\"checked\" /><label for=\"q101_1_answer1\"><span class=\"answernumber\">b. </span>Managua</label></div></div></div><div class=\"outcome\"><div class=\"feedback\"><p>Respuesta correcta</p></div></div><input type=\"hidden\" name=\"q101:1_:sequencecheck\" value=\"1\" /></div>"
+    }
+  ],
+  "additionaldata": []
+}
