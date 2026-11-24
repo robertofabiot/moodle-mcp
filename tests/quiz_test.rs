@@ -1127,3 +1127,272 @@ async fn test_quiz_finish_warnings_fails_as_api_error() {
         .unwrap()
         .contains("No se puede cerrar el intento"));
 }
+
+#[tokio::test]
+async fn test_quiz_finish_with_503_performs_exactly_one_request_no_retries() {
+    let mock = MockServer::start().await;
+
+    // write_client debe tener 0 reintentos ante 503
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_process_attempt"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_finish")
+                .with_arguments(json!({ "attemptid": 101 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool quiz_finish con 503");
+
+    assert!(res.is_error.unwrap_or(false));
+}
+
+#[tokio::test]
+async fn test_quiz_full_attempt_lifecycle_flow() {
+    let mock = MockServer::start().await;
+
+    // 1. Resolver cmid
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module",
+        ))
+        .and(body_string_contains("cmid=979333"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cmid_response(
+            979333,
+            68822,
+            8233,
+            "quiz",
+            "Cuestionario Integral",
+        )))
+        .mount(&mock)
+        .await;
+
+    // 2. Info de acceso al quiz (sin SEB)
+    let access_info = json!({
+        "accessrules": [],
+        "preventaccessreasons": [],
+        "activerulenames": [],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_quiz_access_information",
+        ))
+        .and(body_string_contains("quizid=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(access_info.to_string()))
+        .mount(&mock)
+        .await;
+
+    // 3. Sin intentos previos
+    let empty_attempts = json!({
+        "attempts": [],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_user_attempts",
+        ))
+        .and(body_string_contains("quizid=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(empty_attempts.to_string()))
+        .mount(&mock)
+        .await;
+
+    // 4. Iniciar intento
+    let start_response = json!({
+        "attempt": {
+            "id": 101,
+            "quiz": 68822,
+            "state": "inprogress",
+            "timestart": 1700000000,
+            "timelimit": 3600,
+            "endtime": 1700003600,
+            "layout": "1,0"
+        },
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_start_attempt"))
+        .and(body_string_contains("quizid=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(start_response.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    // 5. Leer página 0
+    let page_data = json!({
+        "attempt": {
+            "id": 101,
+            "quiz": 68822,
+            "state": "inprogress",
+            "timestart": 1700000000,
+            "timefinish": 0,
+            "timeleft": 3600
+        },
+        "nextpage": -1,
+        "timeleft": 3600,
+        "questions": [
+            {
+                "slot": 1,
+                "type": "multichoice",
+                "number": 1,
+                "status": "Sin responder aún",
+                "state": "todo",
+                "html": "<div class=\"que multichoice deferredfeedback notyetanswered\"><div class=\"qtext\"><p>¿Pregunta 1?</p></div><div class=\"ablock\"><div class=\"answer\"><div class=\"r0\"><input type=\"radio\" name=\"q101:1_answer\" value=\"1\" id=\"opt1\" /><label for=\"opt1\">Opción A</label></div></div></div><input type=\"hidden\" name=\"q101:1_:sequencecheck\" value=\"1\" /><input type=\"hidden\" name=\"q101:1_:flagged\" value=\"0\" /></div>"
+            }
+        ],
+        "messages": [],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_get_attempt_data"))
+        .and(body_string_contains("attemptid=101"))
+        .and(body_string_contains("page=0"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(page_data.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    // 6. Guardar respuestas
+    let save_response = json!({
+        "status": true,
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_save_attempt"))
+        .and(body_string_contains("attemptid=101"))
+        .and(body_string_contains("q101%3A1_answer"))
+        .and(body_string_contains("q101%3A1_%3Asequencecheck"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(save_response.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    // 7. Procesar y finalizar
+    let process_response = json!({
+        "state": "finished",
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_process_attempt"))
+        .and(body_string_contains("attemptid=101"))
+        .and(body_string_contains("finishattempt=1"))
+        .and(body_string_contains("timeup=0"))
+        .and(body_string_contains("q101%3A1_%3Asequencecheck"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(process_response.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    // 8. Revisión final
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_attempt_review",
+        ))
+        .and(body_string_contains("attemptid=101"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_REVIEW))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let (client, ctx) = start_server_and_ctx(&mock).await;
+
+    // Paso 1: quiz_start
+    let res_start = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_start")
+                .with_arguments(json!({ "cmid": 979333 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("quiz_start");
+    assert!(!res_start.is_error.unwrap_or(false));
+    let val_start: serde_json::Value =
+        serde_json::from_str(&res_start.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(val_start["attemptid"], 101);
+    assert_eq!(val_start["state"], "inprogress");
+    assert_eq!(val_start["pages"], json!([0]));
+
+    // Paso 2: quiz_get_page
+    let res_page = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_get_page").with_arguments(
+                json!({ "attemptid": 101, "page": 0 })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("quiz_get_page");
+    assert!(!res_page.is_error.unwrap_or(false));
+    let val_page: serde_json::Value =
+        serde_json::from_str(&res_page.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(val_page["attemptid"], 101);
+    assert_eq!(val_page["nextpage"], -1);
+    assert_eq!(val_page["questions"].as_array().unwrap().len(), 1);
+
+    // Verificar que se guardó en memoria
+    {
+        let guard = ctx.quiz_hidden.lock().unwrap();
+        assert_eq!(
+            guard.get(&101).unwrap().get("q101:1_:sequencecheck"),
+            Some(&"1".to_string())
+        );
+    }
+
+    // Paso 3: quiz_save
+    let res_save = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_save").with_arguments(
+                json!({
+                    "attemptid": 101,
+                    "answers": { "q101:1_answer": "1" }
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("quiz_save");
+    assert!(!res_save.is_error.unwrap_or(false));
+    let val_save: serde_json::Value =
+        serde_json::from_str(&res_save.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(val_save["saved"], true);
+
+    // Paso 4: quiz_finish
+    let res_finish = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_finish")
+                .with_arguments(json!({ "attemptid": 101 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("quiz_finish");
+    assert!(!res_finish.is_error.unwrap_or(false));
+    let val_finish: serde_json::Value =
+        serde_json::from_str(&res_finish.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(val_finish["finished"], true);
+    assert_eq!(val_finish["attemptid"], 101);
+    assert_eq!(val_finish["state"], "finished");
+    assert_eq!(val_finish["grade"], 9.5);
+
+    // Verificar limpieza de memoria
+    {
+        let guard = ctx.quiz_hidden.lock().unwrap();
+        assert!(guard.get(&101).is_none());
+    }
+}
