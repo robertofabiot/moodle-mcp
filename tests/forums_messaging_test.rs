@@ -1482,3 +1482,645 @@ async fn test_forums_and_messaging_scrub_tokens_and_handle_invalid_token() {
     assert!(res_inv.is_error.unwrap_or(false));
     assert_eq!(parse_tool_json(&res_inv)["error"]["kind"], "invalid_token");
 }
+
+#[tokio::test]
+async fn test_forum_list_edge_cases_empty_nulls_and_warnings() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_forums_by_courses",
+        ))
+        .and(body_string_contains("courseids%5B0%5D=1001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_forums_by_courses",
+        ))
+        .and(body_string_contains("courseids%5B0%5D=1002"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": 91,
+                "coursemodule": 55501,
+                "name": null,
+                "type": null,
+                "intro": null
+            }
+        ])))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_forums_by_courses",
+        ))
+        .and(body_string_contains("courseids%5B0%5D=1003"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "warnings": [{ "warningcode": "noaccess", "message": "Sin acceso al curso" }]
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res_empty = client
+        .call_tool(
+            CallToolRequestParams::new("forum_list")
+                .with_arguments(json!({ "courseid": 1001 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("forum_list empty");
+    assert!(!res_empty.is_error.unwrap_or(false));
+    let val_empty = parse_tool_json(&res_empty);
+    assert_eq!(val_empty["forums"].as_array().unwrap().len(), 0);
+
+    let res_nulls = client
+        .call_tool(
+            CallToolRequestParams::new("forum_list")
+                .with_arguments(json!({ "courseid": 1002 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("forum_list nulls");
+    assert!(!res_nulls.is_error.unwrap_or(false));
+    let val_nulls = parse_tool_json(&res_nulls);
+    assert_eq!(val_nulls["forums"][0]["cmid"], 55501);
+    assert_eq!(val_nulls["forums"][0]["course"], 1002);
+    assert_eq!(val_nulls["forums"][0]["name"], "");
+    assert_eq!(val_nulls["forums"][0]["type"], "");
+    assert_eq!(val_nulls["forums"][0]["duedate"], 0);
+
+    let res_warn = client
+        .call_tool(
+            CallToolRequestParams::new("forum_list")
+                .with_arguments(json!({ "courseid": 1003 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("forum_list warnings");
+    assert!(res_warn.is_error.unwrap_or(false));
+    let val_warn = parse_tool_json(&res_warn);
+    assert_eq!(val_warn["error"]["kind"], "api");
+    assert!(val_warn["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Sin acceso al curso"));
+}
+
+#[tokio::test]
+async fn test_forum_list_discussions_nulls_numeric_booleans_and_warnings() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module_by_instance",
+        ))
+        .and(body_string_contains("instance=92"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cmid_response(
+            980200,
+            92,
+            8233,
+            "forum",
+            "Foro con variantes",
+        )))
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_forum_discussions",
+        ))
+        .and(body_string_contains("forumid=92"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "discussions": [
+                {
+                    "id": 701,
+                    "name": null,
+                    "subject": "",
+                    "modified": 1700001234,
+                    "pinned": 1,
+                    "locked": 0
+                }
+            ],
+            "warnings": [{ "warningcode": "notice", "message": "Aviso parcial" }]
+        })))
+        .up_to_n_times(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_forum_discussions",
+        ))
+        .and(body_string_contains("forumid=92"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "discussions": null,
+            "warnings": null
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res1 = client
+        .call_tool(
+            CallToolRequestParams::new("forum_list_discussions")
+                .with_arguments(json!({ "forumid": 92 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("numeric booleans");
+    assert!(!res1.is_error.unwrap_or(false));
+    let val1 = parse_tool_json(&res1);
+    assert_eq!(val1["discussions"][0]["pinned"], true);
+    assert_eq!(val1["discussions"][0]["locked"], false);
+    assert_eq!(val1["discussions"][0]["timemodified"], 1700001234);
+    assert_eq!(val1["warnings"].as_array().unwrap().len(), 1);
+
+    let res2 = client
+        .call_tool(
+            CallToolRequestParams::new("forum_list_discussions")
+                .with_arguments(json!({ "forumid": 92 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("null discussions and warnings");
+    assert!(!res2.is_error.unwrap_or(false));
+    let val2 = parse_tool_json(&res2);
+    assert_eq!(val2["discussions"].as_array().unwrap().len(), 0);
+    assert_eq!(val2["warnings"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_forum_get_discussion_empty_posts_and_missing_mimetype() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_discussion_posts",
+        ))
+        .and(body_string_contains("discussionid=5001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "posts": []
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_discussion_posts",
+        ))
+        .and(body_string_contains("discussionid=5002"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "posts": [{
+                "id": 801,
+                "parentid": null,
+                "author": null,
+                "subject": null,
+                "message": null,
+                "timecreated": 0,
+                "attachments": [{
+                    "filename": "sin_mime.bin",
+                    "filesize": 512,
+                    "url": "https://moodle.example/pluginfile.php/10/sin_mime.bin"
+                }]
+            }]
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res_empty = client
+        .call_tool(
+            CallToolRequestParams::new("forum_get_discussion")
+                .with_arguments(json!({ "discussionid": 5001 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("empty posts");
+    assert!(!res_empty.is_error.unwrap_or(false));
+    assert_eq!(
+        parse_tool_json(&res_empty)["posts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let res_null_mime = client
+        .call_tool(
+            CallToolRequestParams::new("forum_get_discussion")
+                .with_arguments(json!({ "discussionid": 5002 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("missing mimetype");
+    assert!(!res_null_mime.is_error.unwrap_or(false));
+    let val = parse_tool_json(&res_null_mime);
+    let post = &val["posts"][0];
+    assert_eq!(post["postid"], 801);
+    assert_eq!(post["parentid"], 0);
+    assert_eq!(post["author"], "");
+    assert_eq!(post["subject"], "");
+    assert_eq!(post["timecreated"], 0);
+    assert!(post["timecreated_iso"].is_null());
+    assert_eq!(
+        post["attachments"][0]["fileurl"],
+        "https://moodle.example/pluginfile.php/10/sin_mime.bin"
+    );
+    assert!(post["attachments"][0]["mimetype"].is_null());
+}
+
+#[tokio::test]
+async fn test_forum_reply_validates_attachments_before_reading_parent_and_nested_post_id() {
+    let mock = MockServer::start().await;
+
+    // Cuando el archivo adjunto no existe, NO debe llamarse mod_forum_get_discussion_post
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_discussion_post",
+        ))
+        .and(body_string_contains("postid=777"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    // Warnings al consultar postid 778 -> error api
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_get_discussion_post",
+        ))
+        .and(body_string_contains("postid=778"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "warnings": [{ "warningcode": "nopost", "message": "Mensaje padre no encontrado" }]
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    // Fallback a resp.post.id cuando falta postid raíz
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_forum_add_discussion_post",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "post": { "id": 9901 },
+            "warnings": []
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res_missing = client
+        .call_tool(
+            CallToolRequestParams::new("forum_reply").with_arguments(
+                json!({
+                    "postid": 777,
+                    "message": "Respuesta con adjunto inválido",
+                    "attachments": ["/ruta/inexistente/archivo_99999.pdf"],
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("missing attachment without subject");
+    assert!(res_missing.is_error.unwrap_or(false));
+    assert_eq!(
+        parse_tool_json(&res_missing)["error"]["kind"],
+        "invalid_arguments"
+    );
+
+    let res_warn = client
+        .call_tool(
+            CallToolRequestParams::new("forum_reply").with_arguments(
+                json!({
+                    "postid": 778,
+                    "message": "Respuesta sin asunto",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("parent post warning");
+    assert!(res_warn.is_error.unwrap_or(false));
+    let val_warn = parse_tool_json(&res_warn);
+    assert_eq!(val_warn["error"]["kind"], "api");
+    assert!(val_warn["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Mensaje padre no encontrado"));
+
+    let res_nested = client
+        .call_tool(
+            CallToolRequestParams::new("forum_reply").with_arguments(
+                json!({
+                    "postid": 779,
+                    "subject": "Asunto directo",
+                    "message": "Mensaje",
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("nested post id");
+    assert!(!res_nested.is_error.unwrap_or(false));
+    assert_eq!(parse_tool_json(&res_nested)["postid"], 9901);
+}
+
+#[tokio::test]
+async fn test_forum_new_discussion_validates_attachments_early_and_wrong_modname() {
+    let mock = MockServer::start().await;
+
+    // Si hay archivo inexistente, no debe llamarse resolve_module para cmid=980101
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("cmid=980101"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    // Módulo assign en lugar de forum -> invalid_arguments
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module",
+        ))
+        .and(body_string_contains("cmid=979333"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(cmid_response(979333, 68822, 8233, "assign", "Tarea")),
+        )
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/upload.php"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res_missing = client
+        .call_tool(
+            CallToolRequestParams::new("forum_new_discussion").with_arguments(
+                json!({
+                    "cmid": 980101,
+                    "subject": "Tema",
+                    "message": "Contenido",
+                    "attachments": ["/ruta/inexistente/no_existe_new_disc.pdf"],
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("missing attachment new discussion");
+    assert!(res_missing.is_error.unwrap_or(false));
+    assert_eq!(
+        parse_tool_json(&res_missing)["error"]["kind"],
+        "invalid_arguments"
+    );
+
+    let res_wrong_mod = client
+        .call_tool(
+            CallToolRequestParams::new("forum_new_discussion").with_arguments(
+                json!({
+                    "cmid": 979333,
+                    "subject": "Tema",
+                    "message": "Contenido",
+                    "attachments": [],
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("wrong modname new discussion");
+    assert!(res_wrong_mod.is_error.unwrap_or(false));
+    assert_eq!(
+        parse_tool_json(&res_wrong_mod)["error"]["kind"],
+        "invalid_arguments"
+    );
+}
+
+#[tokio::test]
+async fn test_conversations_edge_cases_empty_nulls_and_lastmessage_markdown() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_message_get_conversations",
+        ))
+        .and(body_string_contains("limitnum=5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "conversations": [{
+                "id": 401,
+                "name": null,
+                "members": [{ "id": 10002, "fullname": null, "isonline": null, "isblocked": 0 }],
+                "messages": null,
+                "lastmessage": "<p>Último <strong>aviso</strong></p>"
+            }]
+        })))
+        .up_to_n_times(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_message_get_conversations",
+        ))
+        .and(body_string_contains("limitnum=2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "conversations": []
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_message_get_conversation_messages",
+        ))
+        .and(body_string_contains("convid=401"))
+        .and(body_string_contains("limitnum=10"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "members": null,
+            "messages": []
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res_list = client
+        .call_tool(
+            CallToolRequestParams::new("list_conversations")
+                .with_arguments(json!({ "limit": 5 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("list_conversations custom limit");
+    assert!(!res_list.is_error.unwrap_or(false));
+    let val_list = parse_tool_json(&res_list);
+    assert_eq!(val_list["conversations"][0]["id"], 401);
+    assert!(val_list["conversations"][0]["name"].is_null());
+    assert_eq!(val_list["conversations"][0]["members"][0]["fullname"], "");
+    assert_eq!(
+        val_list["conversations"][0]["members"][0]["isblocked"],
+        false
+    );
+    assert!(val_list["conversations"][0]["lastmessage_markdown"]
+        .as_str()
+        .unwrap()
+        .contains("**aviso**"));
+
+    let res_empty_convs = client
+        .call_tool(
+            CallToolRequestParams::new("list_conversations")
+                .with_arguments(json!({ "limit": 2 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("list_conversations empty");
+    assert!(!res_empty_convs.is_error.unwrap_or(false));
+    assert_eq!(
+        parse_tool_json(&res_empty_convs)["conversations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let res_get = client
+        .call_tool(
+            CallToolRequestParams::new("get_conversation").with_arguments(
+                json!({ "conversationid": 401, "limit": 10 })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("get_conversation empty");
+    assert!(!res_get.is_error.unwrap_or(false));
+    let val_get = parse_tool_json(&res_get);
+    assert_eq!(val_get["members"].as_array().unwrap().len(), 0);
+    assert_eq!(val_get["messages"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_send_message_rejects_empty_array_and_negative_msgid_sentinel() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_message_send_messages_to_conversation",
+        ))
+        .and(body_string_contains("conversationid=305"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_message_send_messages_to_conversation",
+        ))
+        .and(body_string_contains("conversationid=306"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "warnings": [{ "warningcode": "notfound", "message": "Conversación no encontrada" }]
+        })))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_message_send_instant_messages",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "msgid": -1, "errormessage": null }
+        ])))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res_empty = client
+        .call_tool(
+            CallToolRequestParams::new("send_message").with_arguments(
+                json!({ "conversationid": 305, "text": "Hola" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("empty array send_message");
+    assert!(res_empty.is_error.unwrap_or(false));
+    assert_eq!(parse_tool_json(&res_empty)["error"]["kind"], "protocol");
+
+    let res_warn = client
+        .call_tool(
+            CallToolRequestParams::new("send_message").with_arguments(
+                json!({ "conversationid": 306, "text": "Hola" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("warnings send_message");
+    assert!(res_warn.is_error.unwrap_or(false));
+    assert_eq!(parse_tool_json(&res_warn)["error"]["kind"], "api");
+
+    let res_sentinel = client
+        .call_tool(
+            CallToolRequestParams::new("send_message").with_arguments(
+                json!({ "touserid": 10004, "text": "Hola" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("sentinel msgid -1");
+    assert!(res_sentinel.is_error.unwrap_or(false));
+    assert_eq!(parse_tool_json(&res_sentinel)["error"]["kind"], "api");
+}
