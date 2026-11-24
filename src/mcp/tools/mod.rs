@@ -3,6 +3,7 @@ pub mod courses;
 pub mod files;
 pub mod forums;
 pub mod generic;
+pub mod messaging;
 pub mod quiz;
 pub mod sync;
 

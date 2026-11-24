@@ -23,7 +23,8 @@ impl MoodleMcp {
                 + Self::courses_router()
                 + Self::assignments_router()
                 + Self::quiz_router()
-                + Self::forums_router(),
+                + Self::forums_router()
+                + Self::messaging_router(),
         }
     }
 
