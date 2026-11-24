@@ -1,6 +1,6 @@
-use crate::content::html_to_markdown;
+use crate::content::{html_to_markdown, markdown_to_html};
 use crate::mcp::server::MoodleMcp;
-use crate::mcp::tools::format_epoch_iso;
+use crate::mcp::tools::{extract_warnings, format_epoch_iso};
 use crate::moodle::error::MoodleError;
 use crate::moodle::ids::resolve_module;
 use rmcp::handler::server::wrapper::Parameters;
@@ -8,6 +8,8 @@ use rmcp::model::CallToolResult;
 use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use url::Url;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ForumListParams {
@@ -31,6 +33,34 @@ pub struct ForumListDiscussionsParams {
 pub struct ForumGetDiscussionParams {
     /// ID numérico de la discusión de foro (discussionid)
     pub discussionid: i64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ForumReplyParams {
+    /// ID del mensaje (postid) al que se responde
+    pub postid: i64,
+    /// Cuerpo de la respuesta en formato Markdown
+    pub message: String,
+    /// Asunto opcional de la respuesta (si se omite o es vacío, se construye desde el mensaje padre)
+    pub subject: Option<String>,
+    /// Rutas locales opcionales de archivos a adjuntar
+    pub attachments: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ForumNewDiscussionParams {
+    /// ID del módulo de curso (cmid). Mutuamente excluyente con forumid.
+    pub cmid: Option<i64>,
+    /// ID de la instancia del foro (forumid). Mutuamente excluyente con cmid.
+    pub forumid: Option<i64>,
+    /// Asunto del nuevo tema de discusión
+    pub subject: String,
+    /// Cuerpo del mensaje inicial en formato Markdown
+    pub message: String,
+    /// ID del grupo (por defecto 0 para todos los grupos o sin grupos)
+    pub groupid: Option<i64>,
+    /// Rutas locales opcionales de archivos a adjuntar
+    pub attachments: Option<Vec<String>>,
 }
 
 // Modelos de salida
@@ -103,6 +133,20 @@ pub struct ForumAttachment {
     pub filesize: Option<i64>,
     pub fileurl: String,
     pub mimetype: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ForumReplyResponse {
+    pub postid: i64,
+    pub subject: String,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ForumNewDiscussionResponse {
+    pub cmid: i64,
+    pub instance: i64,
+    pub courseid: i64,
+    pub discussionid: i64,
 }
 
 // Modelos internos para deserializar respuestas de Moodle
@@ -204,6 +248,21 @@ struct ForumAttachmentRaw {
     url: Option<String>,
     #[serde(default)]
     mimetype: Option<String>,
+}
+
+/// Construye el asunto de respuesta anteponiendo "Re: " si el asunto padre no comienza ya con dicho prefijo.
+fn build_reply_subject(parent_subject: &str) -> String {
+    let trimmed = parent_subject.trim();
+    if trimmed.is_empty() {
+        "Re: Publicación".to_string()
+    } else if trimmed
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("re: "))
+    {
+        trimmed.to_string()
+    } else {
+        format!("Re: {trimmed}")
+    }
 }
 
 #[tool_router(router = forums_router, vis = "pub(crate)")]
@@ -495,5 +554,348 @@ impl MoodleMcp {
 
         self.ctx
             .ok_json(&response, "forum_get_discussion", Some(&creds))
+    }
+
+    /// Publica una respuesta a un mensaje existente dentro de una discusión de foro.
+    #[rmcp::tool(
+        name = "forum_reply",
+        description = "Publica una respuesta en Markdown a un mensaje de foro, resolviendo automáticamente el asunto si se omite y subiendo archivos adjuntos opcionales",
+        annotations(destructive_hint = true)
+    )]
+    pub async fn forum_reply(&self, params: Parameters<ForumReplyParams>) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        if params.0.message.trim().is_empty() {
+            return self.ctx.tool_error(
+                "invalid_arguments",
+                "El mensaje de la respuesta no puede estar vacío",
+                None,
+                None,
+                None,
+                Some(&creds),
+            );
+        }
+
+        let subject = match params
+            .0
+            .subject
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(s) => s.to_string(),
+            None => {
+                let mut post_params = serde_json::Map::new();
+                post_params.insert("postid".to_string(), serde_json::json!(params.0.postid));
+
+                let post_resp = match self
+                    .ctx
+                    .client
+                    .call_raw(&creds.token, "mod_forum_get_discussion_post", &post_params)
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(MoodleError::InvalidToken) => {
+                        return self.ctx.handle_invalid_token().await;
+                    }
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+                };
+
+                let parent_subject = post_resp
+                    .get("post")
+                    .and_then(|p| p.get("subject"))
+                    .and_then(|s| s.as_str())
+                    .or_else(|| post_resp.get("subject").and_then(|s| s.as_str()));
+
+                match parent_subject {
+                    Some(subj) => build_reply_subject(subj),
+                    None => {
+                        if let Some(warn_msg) = extract_warnings(&post_resp) {
+                            return self.ctx.tool_error(
+                                "api",
+                                warn_msg,
+                                None,
+                                None,
+                                None,
+                                Some(&creds),
+                            );
+                        }
+                        return self.ctx.tool_error(
+                            "protocol",
+                            "Respuesta inválida de mod_forum_get_discussion_post: falta el asunto del mensaje padre",
+                            None,
+                            None,
+                            None,
+                            Some(&creds),
+                        );
+                    }
+                }
+            }
+        };
+
+        let attachment_paths: Vec<PathBuf> = params
+            .0
+            .attachments
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+
+        let mut attachments_itemid: Option<i64> = None;
+        if !attachment_paths.is_empty() {
+            let base_url = match Url::parse(self.ctx.client.base_url()) {
+                Ok(u) => u,
+                Err(e) => {
+                    return self.ctx.tool_error(
+                        "invalid_arguments",
+                        format!("URL base de Moodle inválida: {e}"),
+                        None,
+                        None,
+                        None,
+                        Some(&creds),
+                    );
+                }
+            };
+
+            let upload = match self
+                .ctx
+                .file_client
+                .upload(&base_url, &creds.token, &attachment_paths, None)
+                .await
+            {
+                Ok(res) => res,
+                Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+                Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+            };
+            attachments_itemid = Some(upload.itemid);
+        }
+
+        let html = markdown_to_html(&params.0.message);
+
+        let mut req_params = serde_json::Map::new();
+        req_params.insert("postid".to_string(), serde_json::json!(params.0.postid));
+        req_params.insert("subject".to_string(), serde_json::json!(subject));
+        req_params.insert("message".to_string(), serde_json::json!(html));
+        req_params.insert("messageformat".to_string(), serde_json::json!(1));
+        if let Some(itemid) = attachments_itemid {
+            req_params.insert(
+                "options".to_string(),
+                serde_json::json!([
+                    {
+                        "name": "attachmentsid",
+                        "value": itemid.to_string(),
+                    }
+                ]),
+            );
+        }
+
+        let resp = match self
+            .ctx
+            .write_client
+            .call_raw(&creds.token, "mod_forum_add_discussion_post", &req_params)
+            .await
+        {
+            Ok(v) => v,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        if let Some(warn_msg) = extract_warnings(&resp) {
+            return self
+                .ctx
+                .tool_error("api", warn_msg, None, None, None, Some(&creds));
+        }
+
+        let created_postid = match resp
+            .get("postid")
+            .or_else(|| resp.get("id"))
+            .and_then(|v| v.as_i64())
+        {
+            Some(id) => id,
+            None => {
+                return self.ctx.tool_error(
+                    "protocol",
+                    "Respuesta inválida de mod_forum_add_discussion_post: falta el identificador postid creado",
+                    None,
+                    None,
+                    None,
+                    Some(&creds),
+                );
+            }
+        };
+
+        let response = ForumReplyResponse {
+            postid: created_postid,
+            subject,
+        };
+
+        self.ctx.ok_json(&response, "forum_reply", Some(&creds))
+    }
+
+    /// Crea un nuevo tema de discusión en un foro de Moodle.
+    #[rmcp::tool(
+        name = "forum_new_discussion",
+        description = "Abre una nueva discusión en un foro aceptando cmid o forumid, asunto, mensaje en Markdown, grupo opcional y archivos adjuntos",
+        annotations(destructive_hint = true)
+    )]
+    pub async fn forum_new_discussion(
+        &self,
+        params: Parameters<ForumNewDiscussionParams>,
+    ) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        let subject = params.0.subject.trim().to_string();
+        if subject.is_empty() {
+            return self.ctx.tool_error(
+                "invalid_arguments",
+                "El asunto de la discusión no puede estar vacío",
+                None,
+                None,
+                None,
+                Some(&creds),
+            );
+        }
+
+        if params.0.message.trim().is_empty() {
+            return self.ctx.tool_error(
+                "invalid_arguments",
+                "El mensaje de la discusión no puede estar vacío",
+                None,
+                None,
+                None,
+                Some(&creds),
+            );
+        }
+
+        let resolved = match resolve_module(
+            &self.ctx.client,
+            &creds.token,
+            "forum",
+            params.0.cmid,
+            params.0.forumid,
+        )
+        .await
+        {
+            Ok(m) => m,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(MoodleError::InvalidArguments(msg)) => {
+                return self.ctx.tool_error(
+                    "invalid_arguments",
+                    msg,
+                    None,
+                    None,
+                    None,
+                    Some(&creds),
+                );
+            }
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        let attachment_paths: Vec<PathBuf> = params
+            .0
+            .attachments
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+
+        let mut attachments_itemid: Option<i64> = None;
+        if !attachment_paths.is_empty() {
+            let base_url = match Url::parse(self.ctx.client.base_url()) {
+                Ok(u) => u,
+                Err(e) => {
+                    return self.ctx.tool_error(
+                        "invalid_arguments",
+                        format!("URL base de Moodle inválida: {e}"),
+                        None,
+                        None,
+                        None,
+                        Some(&creds),
+                    );
+                }
+            };
+
+            let upload = match self
+                .ctx
+                .file_client
+                .upload(&base_url, &creds.token, &attachment_paths, None)
+                .await
+            {
+                Ok(res) => res,
+                Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+                Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+            };
+            attachments_itemid = Some(upload.itemid);
+        }
+
+        let html = markdown_to_html(&params.0.message);
+
+        // No enviar messageformat: Moodle 4.5 lo rechaza en mod_forum_add_discussion.
+        let mut req_params = serde_json::Map::new();
+        req_params.insert("forumid".to_string(), serde_json::json!(resolved.instance));
+        req_params.insert("subject".to_string(), serde_json::json!(subject));
+        req_params.insert("message".to_string(), serde_json::json!(html));
+        req_params.insert(
+            "groupid".to_string(),
+            serde_json::json!(params.0.groupid.unwrap_or(0)),
+        );
+        if let Some(itemid) = attachments_itemid {
+            req_params.insert(
+                "options".to_string(),
+                serde_json::json!([
+                    {
+                        "name": "attachmentsid",
+                        "value": itemid.to_string(),
+                    }
+                ]),
+            );
+        }
+
+        let resp = match self
+            .ctx
+            .write_client
+            .call_raw(&creds.token, "mod_forum_add_discussion", &req_params)
+            .await
+        {
+            Ok(v) => v,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        if let Some(warn_msg) = extract_warnings(&resp) {
+            return self
+                .ctx
+                .tool_error("api", warn_msg, None, None, None, Some(&creds));
+        }
+
+        let discussionid = match resp.get("discussionid").and_then(|v| v.as_i64()) {
+            Some(id) => id,
+            None => {
+                return self.ctx.tool_error(
+                    "protocol",
+                    "Respuesta inválida de mod_forum_add_discussion: falta el identificador discussionid",
+                    None,
+                    None,
+                    None,
+                    Some(&creds),
+                );
+            }
+        };
+
+        let response = ForumNewDiscussionResponse {
+            cmid: resolved.cmid,
+            instance: resolved.instance,
+            courseid: resolved.course,
+            discussionid,
+        };
+
+        self.ctx
+            .ok_json(&response, "forum_new_discussion", Some(&creds))
     }
 }
