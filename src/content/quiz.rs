@@ -375,3 +375,327 @@ pub fn parse_question(question_val: &serde_json::Value) -> ParsedQuestion {
         feedback_markdown,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_multichoice_single() {
+        let val = json!({
+            "slot": 1,
+            "type": "multichoice",
+            "number": 1,
+            "status": "Correcta",
+            "state": "gradedright",
+            "mark": "1.00",
+            "maxmark": "1.00",
+            "html": r#"
+                <div class="que multichoice">
+                    <div class="qtext"><p>¿Cuál es la capital de Nicaragua?</p></div>
+                    <div class="ablock">
+                        <div class="answer">
+                            <div class="r0">
+                                <input type="radio" name="q1:1_answer" value="0" id="q1_1_answer0" />
+                                <label for="q1_1_answer0"><span class="answernumber">a. </span>San José</label>
+                            </div>
+                            <div class="r1">
+                                <input type="radio" name="q1:1_answer" value="1" id="q1_1_answer1" checked="checked" />
+                                <label for="q1_1_answer1"><span class="answernumber">b. </span>Managua</label>
+                            </div>
+                        </div>
+                    </div>
+                    <input type="hidden" name="q1:1_:sequencecheck" value="2" />
+                    <input type="hidden" name="q1:1_:flagged" value="0" />
+                    <div class="outcome">
+                        <div class="feedback"><p>¡Respuesta correcta!</p></div>
+                    </div>
+                </div>
+            "#
+        });
+
+        let q = parse_question(&val);
+        assert_eq!(q.slot, 1);
+        assert_eq!(q.number.as_deref(), Some("1"));
+        assert_eq!(q.r#type, "multichoice");
+        assert_eq!(q.status.as_deref(), Some("Correcta"));
+        assert_eq!(q.state.as_deref(), Some("gradedright"));
+        assert_eq!(q.mark.as_deref(), Some("1.00"));
+        assert_eq!(q.maxmark.as_deref(), Some("1.00"));
+        assert!(q.text_markdown.contains("capital de Nicaragua"));
+        assert!(q.supported);
+        assert!(q.raw_html.is_none());
+        assert_eq!(q.feedback_markdown.as_deref(), Some("¡Respuesta correcta!"));
+
+        assert_eq!(
+            q.hidden_fields.get("q1:1_:sequencecheck"),
+            Some(&"2".to_string())
+        );
+        assert_eq!(q.hidden_fields.get("q1:1_:flagged"), Some(&"0".to_string()));
+
+        assert_eq!(q.inputs.len(), 1);
+        let input = &q.inputs[0];
+        assert_eq!(input.name, "q1:1_answer");
+        assert_eq!(input.kind, "single");
+        assert_eq!(input.current.as_deref(), Some("1"));
+        let opts = input.options.as_ref().unwrap();
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0].value, "0");
+        assert_eq!(opts[0].label, "a. San José");
+        assert_eq!(opts[1].value, "1");
+        assert_eq!(opts[1].label, "b. Managua");
+    }
+
+    #[test]
+    fn test_parse_multichoice_multiple() {
+        let val = json!({
+            "slot": 2,
+            "type": "multichoice",
+            "number": "2",
+            "status": "Respuesta guardada",
+            "html": r#"
+                <div class="que multichoice">
+                    <div class="qtext"><p>Seleccione los lenguajes compilados:</p></div>
+                    <div class="answer">
+                        <div class="r0">
+                            <input type="checkbox" name="q2:1_choice0" value="1" id="q2_1_c0" checked="checked" />
+                            <label for="q2_1_c0">Rust</label>
+                        </div>
+                        <div class="r1">
+                            <input type="checkbox" name="q2:1_choice1" value="1" id="q2_1_c1" />
+                            <label for="q2_1_c1">Python</label>
+                        </div>
+                        <div class="r2">
+                            <input type="checkbox" name="q2:1_choice2" value="1" id="q2_1_c2" checked="checked" />
+                            <label for="q2_1_c2">C++</label>
+                        </div>
+                    </div>
+                </div>
+            "#
+        });
+
+        let q = parse_question(&val);
+        assert_eq!(q.slot, 2);
+        assert_eq!(q.inputs.len(), 3);
+        assert_eq!(q.inputs[0].name, "q2:1_choice0");
+        assert_eq!(q.inputs[0].kind, "boolean");
+        assert_eq!(q.inputs[0].current.as_deref(), Some("1"));
+        assert_eq!(q.inputs[0].options.as_ref().unwrap()[0].label, "Rust");
+
+        assert_eq!(q.inputs[1].name, "q2:1_choice1");
+        assert_eq!(q.inputs[1].kind, "boolean");
+        assert_eq!(q.inputs[1].current, None);
+        assert_eq!(q.inputs[1].options.as_ref().unwrap()[0].label, "Python");
+
+        assert_eq!(q.inputs[2].name, "q2:1_choice2");
+        assert_eq!(q.inputs[2].kind, "boolean");
+        assert_eq!(q.inputs[2].current.as_deref(), Some("1"));
+        assert_eq!(q.inputs[2].options.as_ref().unwrap()[0].label, "C++");
+    }
+
+    #[test]
+    fn test_parse_truefalse() {
+        let val = json!({
+            "slot": 3,
+            "type": "truefalse",
+            "number": 3,
+            "html": r#"
+                <div class="que truefalse">
+                    <div class="qtext"><p>El agua hierve a 100 grados Celsius a nivel del mar.</p></div>
+                    <div class="answer">
+                        <div class="r0">
+                            <input type="radio" name="q3:1_answer" value="1" id="q3_1_ans1" checked="checked" />
+                            <label for="q3_1_ans1">Verdadero</label>
+                        </div>
+                        <div class="r1">
+                            <input type="radio" name="q3:1_answer" value="0" id="q3_1_ans0" />
+                            <label for="q3_1_ans0">Falso</label>
+                        </div>
+                    </div>
+                </div>
+            "#
+        });
+
+        let q = parse_question(&val);
+        assert_eq!(q.slot, 3);
+        assert_eq!(q.inputs.len(), 1);
+        let inp = &q.inputs[0];
+        assert_eq!(inp.kind, "single");
+        assert_eq!(inp.name, "q3:1_answer");
+        assert_eq!(inp.current.as_deref(), Some("1"));
+        let opts = inp.options.as_ref().unwrap();
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0].label, "Verdadero");
+        assert_eq!(opts[1].label, "Falso");
+    }
+
+    #[test]
+    fn test_parse_shortanswer() {
+        let val = json!({
+            "slot": 4,
+            "type": "shortanswer",
+            "number": 4,
+            "html": r#"
+                <div class="que shortanswer">
+                    <div class="qtext"><p>¿Cuál es la moneda oficial de Japón?</p></div>
+                    <div class="answer">
+                        <span class="text">Respuesta: </span>
+                        <input type="text" name="q4:1_answer" value="Yen" id="q4_1_ans" />
+                    </div>
+                </div>
+            "#
+        });
+
+        let q = parse_question(&val);
+        assert_eq!(q.slot, 4);
+        assert_eq!(q.inputs.len(), 1);
+        let inp = &q.inputs[0];
+        assert_eq!(inp.kind, "text");
+        assert_eq!(inp.name, "q4:1_answer");
+        assert_eq!(inp.current.as_deref(), Some("Yen"));
+        assert!(inp.options.is_none());
+    }
+
+    #[test]
+    fn test_parse_numerical() {
+        let val = json!({
+            "slot": 5,
+            "type": "numerical",
+            "number": 5,
+            "html": r#"
+                <div class="que numerical">
+                    <div class="qtext"><p>¿Cuánto es 2 + 2?</p></div>
+                    <div class="answer">
+                        <input type="text" name="q5:1_answer" value="4" />
+                    </div>
+                </div>
+            "#
+        });
+
+        let q = parse_question(&val);
+        assert_eq!(q.slot, 5);
+        assert_eq!(q.inputs.len(), 1);
+        let inp = &q.inputs[0];
+        assert_eq!(inp.kind, "text");
+        assert_eq!(inp.name, "q5:1_answer");
+        assert_eq!(inp.current.as_deref(), Some("4"));
+        assert!(inp.options.is_none());
+    }
+
+    #[test]
+    fn test_parse_essay() {
+        let val = json!({
+            "slot": 6,
+            "type": "essay",
+            "number": 6,
+            "html": r#"
+                <div class="que essay">
+                    <div class="qtext"><p>Describa las ventajas de la arquitectura de microservicios.</p></div>
+                    <div class="answer">
+                        <textarea name="q6:1_answer" rows="15" cols="80">Escalabilidad independiente y despliegues modulares.</textarea>
+                    </div>
+                    <input type="hidden" name="q6:1_answerformat" value="1" />
+                    <input type="hidden" name="q6:1_:sequencecheck" value="3" />
+                </div>
+            "#
+        });
+
+        let q = parse_question(&val);
+        assert_eq!(q.slot, 6);
+        assert_eq!(q.inputs.len(), 1);
+        let inp = &q.inputs[0];
+        assert_eq!(inp.kind, "text_long");
+        assert_eq!(inp.name, "q6:1_answer");
+        assert_eq!(
+            inp.current.as_deref(),
+            Some("Escalabilidad independiente y despliegues modulares.")
+        );
+        assert!(inp.options.is_none());
+        assert_eq!(
+            q.hidden_fields.get("q6:1_answerformat"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            q.hidden_fields.get("q6:1_:sequencecheck"),
+            Some(&"3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_match() {
+        let val = json!({
+            "slot": 7,
+            "type": "match",
+            "number": 7,
+            "html": r#"
+                <div class="que match">
+                    <div class="qtext"><p>Empareje cada país con su capital:</p></div>
+                    <table class="answer">
+                        <tbody>
+                            <tr class="r0">
+                                <td class="text"><p>Francia</p></td>
+                                <td class="control">
+                                    <select name="q7:1_sub0" id="q7_1_sub0">
+                                        <option value="0">Elegir...</option>
+                                        <option value="1" selected="selected">París</option>
+                                        <option value="2">Madrid</option>
+                                    </select>
+                                </td>
+                            </tr>
+                            <tr class="r1">
+                                <td class="text"><p>España</p></td>
+                                <td class="control">
+                                    <select name="q7:1_sub1" id="q7_1_sub1">
+                                        <option value="0">Elegir...</option>
+                                        <option value="1">París</option>
+                                        <option value="2" selected="selected">Madrid</option>
+                                    </select>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            "#
+        });
+
+        let q = parse_question(&val);
+        assert_eq!(q.slot, 7);
+        assert_eq!(q.inputs.len(), 2);
+
+        let inp0 = &q.inputs[0];
+        assert_eq!(inp0.kind, "select");
+        assert_eq!(inp0.name, "q7:1_sub0");
+        assert_eq!(inp0.current.as_deref(), Some("1"));
+        let opts0 = inp0.options.as_ref().unwrap();
+        assert_eq!(opts0.len(), 3);
+        assert_eq!(opts0[0].value, "0");
+        assert_eq!(opts0[0].label, "Elegir...");
+        assert_eq!(opts0[1].value, "1");
+        assert_eq!(opts0[1].label, "París");
+        assert_eq!(opts0[2].value, "2");
+        assert_eq!(opts0[2].label, "Madrid");
+
+        let inp1 = &q.inputs[1];
+        assert_eq!(inp1.kind, "select");
+        assert_eq!(inp1.name, "q7:1_sub1");
+        assert_eq!(inp1.current.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn test_parse_unsupported_question() {
+        let raw_html_content = r#"<div class="que ddimageortext"><div class="qtext"><p>Arrastra las etiquetas a la imagen</p></div><div class="droparea">...</div></div>"#;
+        let val = json!({
+            "slot": 8,
+            "type": "ddimageortext",
+            "number": 8,
+            "html": raw_html_content
+        });
+
+        let q = parse_question(&val);
+        assert_eq!(q.slot, 8);
+        assert_eq!(q.r#type, "ddimageortext");
+        assert!(!q.supported);
+        assert_eq!(q.raw_html.as_deref(), Some(raw_html_content));
+    }
+}

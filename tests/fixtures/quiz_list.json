@@ -1,0 +1,20 @@
+{
+  "quizzes": [
+    {
+      "id": 68822,
+      "course": 8233,
+      "coursemodule": 979333,
+      "name": "Cuestionario de Evaluación 1",
+      "intro": "<p>Bienvenido al cuestionario de prueba. Responde todas las preguntas antes de que finalice el tiempo.</p>",
+      "introformat": 1,
+      "timeopen": 1700000000,
+      "timeclose": 1700003600,
+      "timelimit": 3600,
+      "attempts": 2,
+      "grademethod": 1,
+      "decimalpoints": 2,
+      "questiondecimalpoints": -1,
+      "sumgrades": 10.0
+    }
+  ]
+}

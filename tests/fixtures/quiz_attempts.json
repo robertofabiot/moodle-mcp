@@ -1,0 +1,15 @@
+{
+  "attempts": [
+    {
+      "id": 101,
+      "quiz": 68822,
+      "userid": 10001,
+      "attempt": 1,
+      "sumgrades": 9.5,
+      "state": "finished",
+      "timestart": 1700000100,
+      "timefinish": 1700001800
+    }
+  ],
+  "warnings": []
+}
