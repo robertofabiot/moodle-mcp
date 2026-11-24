@@ -22,7 +22,8 @@ impl MoodleMcp {
                 + Self::sync_router()
                 + Self::courses_router()
                 + Self::assignments_router()
-                + Self::quiz_router(),
+                + Self::quiz_router()
+                + Self::forums_router(),
         }
     }
 
