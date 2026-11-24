@@ -116,6 +116,10 @@ En tu archivo de configuración de Claude Desktop:
 | `get_assignment` | `cmid?: int`, `assignid?: int` | `read_only_hint = true` | Consulta los detalles de una tarea: enunciado en Markdown, archivos de consigna, configuración de entrega, fechas límites y estado/calificación del alumno. |
 | `submit_assignment` | `cmid?: int`, `assignid?: int`, `files?: string[]`, `onlinetext?: string`, `onlinetext_format?: string`, `keep_existing_files?: bool`, `final?: bool` | `destructive_hint = true` | Guarda o envía una entrega de tarea con archivos locales y/o texto en línea, con opción de conservar archivos previos y envío definitivo a calificación. |
 | `quiz_info` | `cmid?: int`, `quizid?: int` | `read_only_hint = true` | Consulta la información detallada de un cuestionario, incluyendo reglas de acceso, restricciones de contraseña o SEB, fechas y el historial de intentos realizados. |
+| `quiz_start` | `cmid?: int`, `quizid?: int`, `password?: string`, `forcenew?: bool` | `destructive_hint = true` | Inicia un nuevo intento de resolución o retoma uno en curso, soportando contraseña y verificando restricciones como Safe Exam Browser. |
+| `quiz_get_page` | `attemptid: int`, `page: int` | `read_only_hint = true` | Lee una página de un intento de cuestionario, analizando las preguntas y guardando automáticamente sus campos ocultos en memoria. |
+| `quiz_save` | `attemptid: int`, `answers: object` | `destructive_hint = false` | Guarda respuestas intermedias en un intento de cuestionario inyectando automáticamente los campos ocultos y tokens de secuencia correspondientes. |
+| `quiz_finish` | `attemptid: int` | `destructive_hint = true` | Envía definitivamente un intento de cuestionario para su calificación, transmitiendo los campos ocultos y obteniendo la revisión final. |
 | `quiz_review` | `attemptid: int`, `page?: int` | `read_only_hint = true` | Obtiene la revisión de un intento terminado, devolviendo la nota final y las preguntas analizadas con sus opciones, estado y retroalimentación en Markdown. |
 
 ---

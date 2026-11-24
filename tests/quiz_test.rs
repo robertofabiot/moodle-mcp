@@ -132,6 +132,16 @@ async fn test_quiz_tools_annotations() {
         .expect("quiz_save debe estar registrada");
     let save_ann = save.annotations.as_ref().expect("annotations de quiz_save");
     assert_eq!(save_ann.destructive_hint, Some(false));
+
+    // 6. quiz_finish: destructive_hint = true
+    let finish = tool_map
+        .get("quiz_finish")
+        .expect("quiz_finish debe estar registrada");
+    let finish_ann = finish
+        .annotations
+        .as_ref()
+        .expect("annotations de quiz_finish");
+    assert_eq!(finish_ann.destructive_hint, Some(true));
 }
 
 #[tokio::test]
@@ -1008,4 +1018,112 @@ async fn test_quiz_save_warnings_fails_as_api_error() {
         .as_str()
         .unwrap()
         .contains("No se pudo guardar la respuesta"));
+}
+
+#[tokio::test]
+async fn test_quiz_finish_success_with_review() {
+    let mock = MockServer::start().await;
+
+    // 1. mod_quiz_process_attempt con finishattempt = 1
+    let process_response = json!({
+        "state": "finished",
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_process_attempt"))
+        .and(body_string_contains("attemptid=101"))
+        .and(body_string_contains("finishattempt=1"))
+        .and(body_string_contains("timeup=0"))
+        .and(body_string_contains("q101%3A1_%3Asequencecheck"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(process_response.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    // 2. mod_quiz_get_attempt_review para obtener calificación final
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_attempt_review",
+        ))
+        .and(body_string_contains("attemptid=101"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_REVIEW))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let (client, ctx) = start_server_and_ctx(&mock).await;
+    {
+        let mut guard = ctx.quiz_hidden.lock().unwrap();
+        let map = guard.entry(101).or_default();
+        map.insert("q101:1_:sequencecheck".to_string(), "2".to_string());
+    }
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_finish")
+                .with_arguments(json!({ "attemptid": 101 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool quiz_finish");
+
+    assert!(!res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["finished"], true);
+    assert_eq!(val["attemptid"], 101);
+    assert_eq!(val["state"], "finished");
+    assert_eq!(val["grade"], 9.5);
+
+    // Validar que se limpiaron los campos en memoria
+    let hidden_guard = ctx.quiz_hidden.lock().unwrap();
+    assert!(hidden_guard.get(&101).is_none());
+}
+
+#[tokio::test]
+async fn test_quiz_finish_warnings_fails_as_api_error() {
+    let mock = MockServer::start().await;
+
+    let process_response_warning = json!({
+        "state": "inprogress",
+        "warnings": [
+            {
+                "item": "quiz",
+                "itemid": 101,
+                "warningcode": "finishfailed",
+                "message": "No se puede cerrar el intento por validación pendiente"
+            }
+        ]
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_process_attempt"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(process_response_warning.to_string()),
+        )
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_finish")
+                .with_arguments(json!({ "attemptid": 101 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool quiz_finish con warning");
+
+    assert!(res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["error"]["kind"], "api");
+    assert!(val["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("No se puede cerrar el intento"));
 }

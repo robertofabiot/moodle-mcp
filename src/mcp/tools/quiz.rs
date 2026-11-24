@@ -103,6 +103,21 @@ pub struct QuizSaveResponse {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct QuizFinishParams {
+    /// ID del intento a finalizar definitivamente
+    pub attemptid: i64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct QuizFinishResponse {
+    pub finished: bool,
+    pub attemptid: i64,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct QuizReviewParams {
     /// ID del intento a revisar
     pub attemptid: i64,
@@ -878,6 +893,119 @@ impl MoodleMcp {
         };
 
         self.ctx.ok_json(&response, "quiz_save", Some(&creds))
+    }
+
+    /// Finaliza y envía a calificación definitiva un intento de cuestionario.
+    #[rmcp::tool(
+        name = "quiz_finish",
+        description = "Envía definitivamente un intento de cuestionario para su calificación, transmitiendo los campos ocultos y obteniendo la revisión final",
+        annotations(destructive_hint = true)
+    )]
+    pub async fn quiz_finish(&self, params: Parameters<QuizFinishParams>) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        let cached_hidden = {
+            let guard = self.ctx.quiz_hidden.lock().unwrap();
+            guard.get(&params.0.attemptid).cloned().unwrap_or_default()
+        };
+
+        let mut proc_params = serde_json::Map::new();
+        proc_params.insert(
+            "attemptid".to_string(),
+            serde_json::json!(params.0.attemptid),
+        );
+        proc_params.insert("finishattempt".to_string(), serde_json::json!(1));
+        proc_params.insert("timeup".to_string(), serde_json::json!(0));
+
+        let mut data_arr = Vec::new();
+        let mut sorted_keys: Vec<_> = cached_hidden.keys().cloned().collect();
+        sorted_keys.sort();
+        for k in sorted_keys {
+            let v = cached_hidden.get(&k).unwrap();
+            data_arr.push(serde_json::json!({
+                "name": k,
+                "value": v,
+            }));
+        }
+        proc_params.insert("data".to_string(), serde_json::Value::Array(data_arr));
+
+        let proc_resp = match self
+            .ctx
+            .write_client
+            .call_raw(&creds.token, "mod_quiz_process_attempt", &proc_params)
+            .await
+        {
+            Ok(v) => v,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        if let Some(warn_msg) = extract_warnings(&proc_resp) {
+            return self
+                .ctx
+                .tool_error("api", warn_msg, None, None, None, Some(&creds));
+        }
+
+        // Consultar revisión del intento terminado
+        let attempt_id_str = params.0.attemptid.to_string();
+        let query_review = [
+            ("wstoken", creds.token.as_str()),
+            ("wsfunction", "mod_quiz_get_attempt_review"),
+            ("moodlewsrestformat", "json"),
+            ("attemptid", attempt_id_str.as_str()),
+            ("page", "-1"),
+        ];
+
+        let review_result: std::result::Result<AttemptReviewRaw, _> = self
+            .ctx
+            .client
+            .post_webservice(&query_review, Priority::Interactive)
+            .await;
+
+        let (state, grade) = match review_result {
+            Ok(rev) => {
+                let grade = rev
+                    .grade
+                    .and_then(|v| {
+                        if let Some(n) = v.as_f64() {
+                            Some(n)
+                        } else if let Some(s) = v.as_str() {
+                            s.parse::<f64>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .or(rev.attempt.sumgrades);
+                (rev.attempt.state, grade)
+            }
+            Err(_) => {
+                let st = proc_resp
+                    .get("state")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("finished")
+                    .to_string();
+                (st, None)
+            }
+        };
+
+        // Limpiar campos ocultos cacheados de la memoria
+        self.ctx
+            .quiz_hidden
+            .lock()
+            .unwrap()
+            .remove(&params.0.attemptid);
+
+        let response = QuizFinishResponse {
+            finished: true,
+            attemptid: params.0.attemptid,
+            state,
+            grade,
+        };
+
+        self.ctx.ok_json(&response, "quiz_finish", Some(&creds))
     }
 
     /// Revisa un intento terminado de cuestionario con sus preguntas y retroalimentación.
