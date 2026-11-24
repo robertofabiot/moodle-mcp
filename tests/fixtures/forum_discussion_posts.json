@@ -1,0 +1,44 @@
+{
+  "posts": [
+    {
+      "id": 204,
+      "subject": "Duda sobre el proyecto final",
+      "message": "<p>Adjunto el <em>borrador inicial</em> para revisión.</p>",
+      "messageformat": 1,
+      "author": {
+        "id": 10001,
+        "fullname": "Estudiante Prueba"
+      },
+      "discussionid": 105,
+      "hasparent": false,
+      "parentid": null,
+      "timecreated": 1700000100,
+      "timemodified": 1700000100,
+      "attachments": [
+        {
+          "filename": "esquema.pdf",
+          "filesize": 20480,
+          "url": "https://moodle.example/pluginfile.php/123/mod_forum/attachment/204/esquema.pdf",
+          "mimetype": "application/pdf"
+        }
+      ]
+    },
+    {
+      "id": 205,
+      "subject": "Re: Duda sobre el proyecto final",
+      "message": "<p>Revisado, continúa con la <strong>implementación</strong>.</p>",
+      "messageformat": 1,
+      "author": {
+        "id": 10002,
+        "fullname": "Docente Ejemplo"
+      },
+      "discussionid": 105,
+      "hasparent": true,
+      "parentid": 204,
+      "timecreated": 1700000500,
+      "timemodified": 1700000500,
+      "attachments": []
+    }
+  ],
+  "warnings": []
+}

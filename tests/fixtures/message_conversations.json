@@ -1,0 +1,31 @@
+{
+  "conversations": [
+    {
+      "id": 305,
+      "name": null,
+      "subname": null,
+      "type": 1,
+      "membercount": 2,
+      "ismuted": false,
+      "isfavourite": false,
+      "isread": false,
+      "unreadcount": 1,
+      "members": [
+        {
+          "id": 10002,
+          "fullname": "Docente Ejemplo",
+          "isonline": false,
+          "isblocked": false
+        }
+      ],
+      "messages": [
+        {
+          "id": 9001,
+          "useridfrom": 10002,
+          "text": "<p>Recuerda entregar el <strong>informe</strong> mañana.</p>",
+          "timecreated": 1700000500
+        }
+      ]
+    }
+  ]
+}

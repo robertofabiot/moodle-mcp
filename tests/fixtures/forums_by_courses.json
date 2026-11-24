@@ -1,0 +1,26 @@
+[
+  {
+    "id": 88,
+    "course": 8233,
+    "type": "news",
+    "name": "Avisos Generales",
+    "intro": "<p>Canal oficial de <strong>avisos</strong> del curso.</p>",
+    "introformat": 1,
+    "duedate": 0,
+    "cutoffdate": 0,
+    "cmid": 980100,
+    "numdiscussions": 2
+  },
+  {
+    "id": 89,
+    "course": 8233,
+    "type": "general",
+    "name": "Foro de Consultas",
+    "intro": "<p>Espacio para resolver dudas de la unidad.</p>",
+    "introformat": 1,
+    "duedate": 1700003600,
+    "cutoffdate": 1700007200,
+    "cmid": 980101,
+    "numdiscussions": 5
+  }
+]
