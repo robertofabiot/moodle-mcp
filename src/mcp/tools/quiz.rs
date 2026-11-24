@@ -8,6 +8,7 @@ use rmcp::model::CallToolResult;
 use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QuizInfoParams {
@@ -85,6 +86,20 @@ pub struct QuizPageResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeleft: Option<i64>,
     pub questions: Vec<ParsedQuestion>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct QuizSaveParams {
+    /// ID del intento activo
+    pub attemptid: i64,
+    /// Respuestas a guardar (pares nombre/valor)
+    pub answers: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct QuizSaveResponse {
+    pub saved: bool,
+    pub attemptid: i64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -724,6 +739,145 @@ impl MoodleMcp {
         };
 
         self.ctx.ok_json(&response, "quiz_get_page", Some(&creds))
+    }
+
+    /// Guarda las respuestas proporcionadas para las preguntas de un intento sin finalizarlo.
+    #[rmcp::tool(
+        name = "quiz_save",
+        description = "Guarda respuestas intermedias en un intento de cuestionario inyectando automáticamente los campos ocultos y tokens de secuencia correspondientes",
+        annotations(destructive_hint = false)
+    )]
+    pub async fn quiz_save(&self, params: Parameters<QuizSaveParams>) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        // 1. Si no hay campos ocultos en memoria para el intento, intentar precargar la página 0
+        let needs_fetch = {
+            let guard = self.ctx.quiz_hidden.lock().unwrap();
+            match guard.get(&params.0.attemptid) {
+                None => true,
+                Some(m) if m.is_empty() => true,
+                Some(_) => false,
+            }
+        };
+
+        if needs_fetch {
+            let attempt_id_str = params.0.attemptid.to_string();
+            let query = [
+                ("wstoken", creds.token.as_str()),
+                ("wsfunction", "mod_quiz_get_attempt_data"),
+                ("moodlewsrestformat", "json"),
+                ("attemptid", attempt_id_str.as_str()),
+                ("page", "0"),
+            ];
+            if let Ok(data_resp) = self
+                .ctx
+                .client
+                .post_webservice::<AttemptDataRaw>(&query, Priority::Interactive)
+                .await
+            {
+                let mut guard = self.ctx.quiz_hidden.lock().unwrap();
+                let attempt_entry = guard.entry(params.0.attemptid).or_default();
+                for q_val in &data_resp.questions {
+                    let parsed = parse_question(q_val);
+                    for (k, v) in parsed.hidden_fields {
+                        attempt_entry.insert(k, v);
+                    }
+                }
+            }
+        }
+
+        // 2. Construir mapa de datos con respuestas y campos ocultos
+        let mut data_map: HashMap<String, String> = HashMap::new();
+        for (name, val) in &params.0.answers {
+            let val_str = match val {
+                serde_json::Value::Bool(b) => {
+                    if *b {
+                        "1".to_string()
+                    } else {
+                        "0".to_string()
+                    }
+                }
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => String::new(),
+                other => other.to_string(),
+            };
+            data_map.insert(name.clone(), val_str);
+        }
+
+        let answer_prefixes: Vec<String> = params
+            .0
+            .answers
+            .keys()
+            .map(|k| {
+                if let Some(idx) = k.find('_') {
+                    k[..=idx].to_string()
+                } else {
+                    k.clone()
+                }
+            })
+            .collect();
+
+        let cached_hidden = {
+            let guard = self.ctx.quiz_hidden.lock().unwrap();
+            guard.get(&params.0.attemptid).cloned().unwrap_or_default()
+        };
+
+        for (hk, hv) in cached_hidden {
+            let matches = if answer_prefixes.is_empty() {
+                true
+            } else {
+                answer_prefixes.iter().any(|p| hk.starts_with(p))
+            };
+            if matches {
+                data_map.entry(hk).or_insert(hv);
+            }
+        }
+
+        let mut save_params = serde_json::Map::new();
+        save_params.insert(
+            "attemptid".to_string(),
+            serde_json::json!(params.0.attemptid),
+        );
+
+        let mut data_arr = Vec::new();
+        let mut sorted_keys: Vec<_> = data_map.keys().cloned().collect();
+        sorted_keys.sort();
+        for k in sorted_keys {
+            let v = data_map.get(&k).unwrap();
+            data_arr.push(serde_json::json!({
+                "name": k,
+                "value": v,
+            }));
+        }
+        save_params.insert("data".to_string(), serde_json::Value::Array(data_arr));
+
+        let save_resp = match self
+            .ctx
+            .write_client
+            .call_raw(&creds.token, "mod_quiz_save_attempt", &save_params)
+            .await
+        {
+            Ok(v) => v,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        if let Some(warn_msg) = extract_warnings(&save_resp) {
+            return self
+                .ctx
+                .tool_error("api", warn_msg, None, None, None, Some(&creds));
+        }
+
+        let response = QuizSaveResponse {
+            saved: true,
+            attemptid: params.0.attemptid,
+        };
+
+        self.ctx.ok_json(&response, "quiz_save", Some(&creds))
     }
 
     /// Revisa un intento terminado de cuestionario con sus preguntas y retroalimentación.

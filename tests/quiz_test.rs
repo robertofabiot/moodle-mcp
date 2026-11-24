@@ -125,6 +125,13 @@ async fn test_quiz_tools_annotations() {
         .as_ref()
         .expect("annotations de quiz_get_page");
     assert_eq!(get_page_ann.read_only_hint, Some(true));
+
+    // 5. quiz_save: destructive_hint = false
+    let save = tool_map
+        .get("quiz_save")
+        .expect("quiz_save debe estar registrada");
+    let save_ann = save.annotations.as_ref().expect("annotations de quiz_save");
+    assert_eq!(save_ann.destructive_hint, Some(false));
 }
 
 #[tokio::test]
@@ -806,4 +813,199 @@ async fn test_quiz_get_page_stores_hidden_fields() {
         attempt_hidden.get("q101:1_:flagged"),
         Some(&"0".to_string())
     );
+}
+
+#[tokio::test]
+async fn test_quiz_save_injects_sequencecheck_automatically() {
+    let mock = MockServer::start().await;
+
+    // 1. Mock de mod_quiz_save_attempt que espera la respuesta y el sequencecheck inyectado
+    let save_response = json!({
+        "status": true,
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_save_attempt"))
+        .and(body_string_contains("attemptid=101"))
+        .and(body_string_contains("q101%3A1_answer"))
+        .and(body_string_contains("q101%3A1_%3Asequencecheck"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(save_response.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let (client, ctx) = start_server_and_ctx(&mock).await;
+
+    // Precargar campo oculto en AppContext::quiz_hidden
+    {
+        let mut guard = ctx.quiz_hidden.lock().unwrap();
+        let map = guard.entry(101).or_default();
+        map.insert("q101:1_:sequencecheck".to_string(), "1".to_string());
+        map.insert("q101:1_:flagged".to_string(), "0".to_string());
+    }
+
+    // Invocación SIN sequencecheck en answers
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_save").with_arguments(
+                json!({
+                    "attemptid": 101,
+                    "answers": {
+                        "q101:1_answer": "1"
+                    }
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("call_tool quiz_save");
+
+    assert!(!res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["saved"], true);
+    assert_eq!(val["attemptid"], 101);
+}
+
+#[tokio::test]
+async fn test_quiz_save_without_cache_reads_page_first() {
+    let mock = MockServer::start().await;
+
+    // 1. mod_quiz_get_attempt_data (precarga automática de página 0)
+    let page_data = json!({
+        "attempt": {
+            "id": 101,
+            "quiz": 68822,
+            "state": "inprogress",
+            "timestart": 1700000000,
+            "timefinish": 0,
+            "timeleft": 3500
+        },
+        "nextpage": 1,
+        "timeleft": 3500,
+        "questions": [
+            {
+                "slot": 1,
+                "type": "multichoice",
+                "number": 1,
+                "status": "Sin responder",
+                "state": "todo",
+                "html": "<div><input type=\"radio\" name=\"q101:1_answer\" value=\"1\" /><input type=\"hidden\" name=\"q101:1_:sequencecheck\" value=\"5\" /></div>"
+            }
+        ],
+        "messages": [],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_get_attempt_data"))
+        .and(body_string_contains("attemptid=101"))
+        .and(body_string_contains("page=0"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(page_data.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    // 2. mod_quiz_save_attempt con sequencecheck = 5
+    let save_response = json!({
+        "status": true,
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_save_attempt"))
+        .and(body_string_contains("attemptid=101"))
+        .and(body_string_contains("q101%3A1_%3Asequencecheck"))
+        .and(body_string_contains("%5D=5"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(save_response.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_save").with_arguments(
+                json!({
+                    "attemptid": 101,
+                    "answers": {
+                        "q101:1_answer": "1"
+                    }
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("call_tool quiz_save sin caché previa");
+
+    assert!(!res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["saved"], true);
+    assert_eq!(val["attemptid"], 101);
+}
+
+#[tokio::test]
+async fn test_quiz_save_warnings_fails_as_api_error() {
+    let mock = MockServer::start().await;
+
+    let save_response_warning = json!({
+        "status": false,
+        "warnings": [
+            {
+                "item": "quiz",
+                "itemid": 101,
+                "warningcode": "savefailed",
+                "message": "No se pudo guardar la respuesta por límite de tiempo"
+            }
+        ]
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_save_attempt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(save_response_warning.to_string()))
+        .mount(&mock)
+        .await;
+
+    let (client, ctx) = start_server_and_ctx(&mock).await;
+    {
+        let mut guard = ctx.quiz_hidden.lock().unwrap();
+        let map = guard.entry(101).or_default();
+        map.insert("q101:1_:sequencecheck".to_string(), "1".to_string());
+    }
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_save").with_arguments(
+                json!({
+                    "attemptid": 101,
+                    "answers": {
+                        "q101:1_answer": "1"
+                    }
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .expect("call_tool quiz_save con warning");
+
+    assert!(res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["error"]["kind"], "api");
+    assert!(val["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("No se pudo guardar la respuesta"));
 }
