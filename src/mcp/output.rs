@@ -172,6 +172,37 @@ pub fn tool_success(
     CallToolResult::success(vec![ContentBlock::text(scrubbed)])
 }
 
+/// Serializa un valor JSON de metadatos, lo sanea con `scrub` y devuelve un `CallToolResult`
+/// con un bloque de texto JSON seguido de un `ContentBlock::image` con base64 crudo (sin prefijo `data:...`).
+pub fn ok_json_with_image<T: Serialize>(
+    value: &T,
+    base64_data: String,
+    mime: &str,
+    token: Option<&str>,
+    private_token: Option<&str>,
+) -> CallToolResult {
+    let raw_serialized = match serde_json::to_string(value) {
+        Ok(s) => s,
+        Err(e) => {
+            return tool_error(
+                "protocol",
+                format!("Error al serializar respuesta: {e}"),
+                None,
+                None,
+                None,
+                token,
+                private_token,
+            );
+        }
+    };
+
+    let scrubbed = scrub(&raw_serialized, token, private_token);
+    CallToolResult::success(vec![
+        ContentBlock::text(scrubbed),
+        ContentBlock::image(base64_data, mime),
+    ])
+}
+
 /// Convierte un `MoodleError` en una respuesta `CallToolResult::error` normalizada.
 pub fn tool_error_from_moodle(
     err: &MoodleError,
@@ -340,5 +371,33 @@ mod tests {
         assert_eq!(parsed.error.errorcode.as_deref(), Some("invalidparam"));
         assert_eq!(parsed.error.debuginfo.as_deref(), Some("debug line"));
         assert_eq!(parsed.error.hint.as_deref(), Some("hint text"));
+    }
+
+    #[test]
+    fn test_ok_json_with_image_scrubs_metadata_and_embeds_raw_base64() {
+        let meta = serde_json::json!({
+            "path": "/tmp/img.png?token=tok_secreto",
+            "mime": "image/png",
+            "size": 4,
+            "inline_image": true
+        });
+        let result = ok_json_with_image(
+            &meta,
+            "iVBORw0=".to_string(),
+            "image/png",
+            Some("tok_secreto"),
+            None,
+        );
+
+        assert!(!result.is_error.unwrap_or(false));
+        assert_eq!(result.content.len(), 2);
+
+        let text = result.content[0].as_text().unwrap();
+        assert!(!text.text.contains("tok_secreto"));
+        assert!(text.text.contains("<token>"));
+
+        let img = result.content[1].as_image().unwrap();
+        assert_eq!(img.data, "iVBORw0=");
+        assert_eq!(img.mime_type, "image/png");
     }
 }
