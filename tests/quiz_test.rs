@@ -1,9 +1,17 @@
 mod common;
 
 use common::start_server;
+use moodle_mcp::config::Config;
+use moodle_mcp::credentials::{CredentialStore, Credentials};
+use moodle_mcp::mcp::{AppContext, MoodleMcp};
+use moodle_mcp::moodle::client::{MoodleClient, MoodleClientBuilder};
+use moodle_mcp::moodle::gate::MoodleGate;
 use rmcp::model::CallToolRequestParams;
+use rmcp::service::{RoleClient, RunningService};
+use rmcp::ServiceExt;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -23,6 +31,54 @@ fn cmid_response(cmid: i64, instance: i64, course: i64, modname: &str, name: &st
         }
     })
     .to_string()
+}
+
+async fn start_server_and_ctx(
+    mock: &MockServer,
+) -> (RunningService<RoleClient, ()>, Arc<AppContext>) {
+    let base_url = mock.uri();
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let download_dir = temp_dir.path().join("downloads");
+    let store_file = temp_dir.path().join("credentials.json");
+
+    let config = Config {
+        base_url: base_url.clone(),
+        download_dir,
+        max_response_bytes: 60_000,
+        max_inline_image_bytes: 1_000_000,
+    };
+
+    let credentials = Some(Credentials {
+        base_url: base_url.clone(),
+        token: "tok123".to_string(),
+        private_token: Some("priv123".to_string()),
+        userid: 10001,
+        username: "24000000".to_string(),
+        fullname: "Estudiante Prueba".to_string(),
+    });
+
+    let gate = MoodleGate::new(4, 3).without_jitter();
+    let client =
+        MoodleClient::from_builder(MoodleClientBuilder::new().base_url(base_url).gate(gate));
+
+    let store = CredentialStore::with_file(store_file);
+    let ctx = Arc::new(
+        AppContext::new_with_session(config, client, store, credentials)
+            .with_env_token_reader(Arc::new(|| (None, None))),
+    );
+    let server = MoodleMcp::new(ctx.clone());
+
+    let (client_io, server_io) = tokio::io::duplex(1 << 16);
+    tokio::spawn(async move {
+        let _keep_alive = temp_dir;
+        if let Ok(running) = server.serve(server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+
+    let client = ().serve(client_io).await.expect("Fallo al conectar cliente duplex a MoodleMcp");
+
+    (client, ctx)
 }
 
 #[tokio::test]
@@ -59,6 +115,16 @@ async fn test_quiz_tools_annotations() {
         .as_ref()
         .expect("annotations de quiz_start");
     assert_eq!(start_ann.destructive_hint, Some(true));
+
+    // 4. quiz_get_page: read_only_hint = true
+    let get_page = tool_map
+        .get("quiz_get_page")
+        .expect("quiz_get_page debe estar registrada");
+    let get_page_ann = get_page
+        .annotations
+        .as_ref()
+        .expect("annotations de quiz_get_page");
+    assert_eq!(get_page_ann.read_only_hint, Some(true));
 }
 
 #[tokio::test]
@@ -657,4 +723,87 @@ async fn test_quiz_start_new_attempt_with_password() {
     assert_eq!(val["timelimit"], 1800);
     assert_eq!(val["endtime"], 1700001800);
     assert_eq!(val["pages"], json!([0]));
+}
+
+#[tokio::test]
+async fn test_quiz_get_page_stores_hidden_fields() {
+    let mock = MockServer::start().await;
+
+    let page_data = json!({
+        "attempt": {
+            "id": 101,
+            "quiz": 68822,
+            "state": "inprogress",
+            "timestart": 1700000000,
+            "timefinish": 0,
+            "timeleft": 3540
+        },
+        "nextpage": 1,
+        "timeleft": 3540,
+        "questions": [
+            {
+                "slot": 1,
+                "type": "multichoice",
+                "number": 1,
+                "status": "Sin responder aún",
+                "state": "todo",
+                "html": "<div class=\"que multichoice deferredfeedback notyetanswered\"><div class=\"qtext\"><p>¿Cuál es la capital de Nicaragua?</p></div><div class=\"ablock\"><div class=\"answer\"><div class=\"r0\"><input type=\"radio\" name=\"q101:1_answer\" value=\"0\" id=\"q101_1_answer0\" /><label for=\"q101_1_answer0\">San José</label></div><div class=\"r1\"><input type=\"radio\" name=\"q101:1_answer\" value=\"1\" id=\"q101_1_answer1\" /><label for=\"q101_1_answer1\">Managua</label></div></div></div><input type=\"hidden\" name=\"q101:1_:sequencecheck\" value=\"1\" /><input type=\"hidden\" name=\"q101:1_:flagged\" value=\"0\" /></div>"
+            }
+        ],
+        "messages": [],
+        "warnings": []
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_get_attempt_data"))
+        .and(body_string_contains("attemptid=101"))
+        .and(body_string_contains("page=0"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(page_data.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let (client, ctx) = start_server_and_ctx(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_get_page").with_arguments(
+                json!({ "attemptid": 101, "page": 0 })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("call_tool quiz_get_page");
+
+    assert!(!res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["attemptid"], 101);
+    assert_eq!(val["page"], 0);
+    assert_eq!(val["nextpage"], 1);
+    assert_eq!(val["timeleft"], 3540);
+
+    let questions = val["questions"].as_array().unwrap();
+    assert_eq!(questions.len(), 1);
+    assert_eq!(questions[0]["slot"], 1);
+    assert_eq!(questions[0]["hidden_fields"]["q101:1_:sequencecheck"], "1");
+    assert_eq!(questions[0]["hidden_fields"]["q101:1_:flagged"], "0");
+
+    // Validar que se almacenó en AppContext::quiz_hidden
+    let hidden_map = ctx.quiz_hidden.lock().unwrap();
+    let attempt_hidden = hidden_map
+        .get(&101)
+        .expect("debe existir attempt 101 en quiz_hidden");
+    assert_eq!(
+        attempt_hidden.get("q101:1_:sequencecheck"),
+        Some(&"1".to_string())
+    );
+    assert_eq!(
+        attempt_hidden.get("q101:1_:flagged"),
+        Some(&"0".to_string())
+    );
 }

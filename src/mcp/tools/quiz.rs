@@ -70,6 +70,24 @@ pub struct QuizStartResponse {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct QuizGetPageParams {
+    /// ID del intento activo
+    pub attemptid: i64,
+    /// Número de página a consultar (inicia en 0)
+    pub page: i64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct QuizPageResponse {
+    pub attemptid: i64,
+    pub page: i64,
+    pub nextpage: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeleft: Option<i64>,
+    pub questions: Vec<ParsedQuestion>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct QuizReviewParams {
     /// ID del intento a revisar
     pub attemptid: i64,
@@ -163,6 +181,22 @@ struct AttemptReviewRaw {
     questions: Vec<serde_json::Value>,
 }
 
+#[derive(Deserialize)]
+struct AttemptDataRaw {
+    #[allow(dead_code)]
+    #[serde(default)]
+    attempt: Option<AttemptMetaRaw>,
+    #[serde(default)]
+    nextpage: Option<i64>,
+    #[serde(default)]
+    timeleft: Option<i64>,
+    #[serde(default)]
+    questions: Vec<serde_json::Value>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    warnings: Vec<serde_json::Value>,
+}
+
 #[derive(Deserialize, Clone)]
 struct AttemptMetaRaw {
     id: i64,
@@ -181,6 +215,8 @@ struct AttemptMetaRaw {
     timelimit: Option<i64>,
     #[serde(default)]
     endtime: Option<i64>,
+    #[serde(default)]
+    timeleft: Option<i64>,
     #[serde(default)]
     pages: Option<Vec<i64>>,
 }
@@ -624,6 +660,70 @@ impl MoodleMcp {
         };
 
         self.ctx.ok_json(&response, "quiz_start", Some(&creds))
+    }
+
+    /// Lee una página de un intento de cuestionario en curso y analiza sus preguntas.
+    #[rmcp::tool(
+        name = "quiz_get_page",
+        description = "Lee una página de un intento de cuestionario, analizando las preguntas y guardando automáticamente sus campos ocultos en memoria",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn quiz_get_page(&self, params: Parameters<QuizGetPageParams>) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        let attempt_id_str = params.0.attemptid.to_string();
+        let page_str = params.0.page.to_string();
+        let query = [
+            ("wstoken", creds.token.as_str()),
+            ("wsfunction", "mod_quiz_get_attempt_data"),
+            ("moodlewsrestformat", "json"),
+            ("attemptid", attempt_id_str.as_str()),
+            ("page", page_str.as_str()),
+        ];
+
+        let data_resp: AttemptDataRaw = match self
+            .ctx
+            .client
+            .post_webservice(&query, Priority::Interactive)
+            .await
+        {
+            Ok(r) => r,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        let parsed_questions = data_resp
+            .questions
+            .iter()
+            .map(parse_question)
+            .collect::<Vec<ParsedQuestion>>();
+
+        {
+            let mut hidden_guard = self.ctx.quiz_hidden.lock().unwrap();
+            let attempt_entry = hidden_guard.entry(params.0.attemptid).or_default();
+            for q in &parsed_questions {
+                for (k, v) in &q.hidden_fields {
+                    attempt_entry.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
+        let timeleft = data_resp
+            .timeleft
+            .or_else(|| data_resp.attempt.as_ref().and_then(|a| a.timeleft));
+
+        let response = QuizPageResponse {
+            attemptid: params.0.attemptid,
+            page: params.0.page,
+            nextpage: data_resp.nextpage.unwrap_or(-1),
+            timeleft,
+            questions: parsed_questions,
+        };
+
+        self.ctx.ok_json(&response, "quiz_get_page", Some(&creds))
     }
 
     /// Revisa un intento terminado de cuestionario con sus preguntas y retroalimentación.
