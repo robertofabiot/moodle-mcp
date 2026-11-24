@@ -1,4 +1,4 @@
-use crate::content::html_to_markdown;
+use crate::content::{html_to_markdown, parse_question, ParsedQuestion};
 use crate::mcp::server::MoodleMcp;
 use crate::moodle::error::MoodleError;
 use crate::moodle::gate::Priority;
@@ -44,6 +44,23 @@ pub struct QuizInfoResponse {
     pub requires_password: bool,
     pub requires_seb: bool,
     pub attempts_history: Vec<QuizAttemptHistory>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct QuizReviewParams {
+    /// ID del intento a revisar
+    pub attemptid: i64,
+    /// Página específica a revisar (-1 para consultar todas las páginas disponibles)
+    pub page: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct QuizReviewResponse {
+    pub attemptid: i64,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade: Option<f64>,
+    pub questions: Vec<ParsedQuestion>,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +121,24 @@ struct QuizAttemptRaw {
     timestart: Option<i64>,
     #[serde(default)]
     timefinish: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct AttemptReviewRaw {
+    attempt: AttemptMetaRaw,
+    #[serde(default)]
+    grade: Option<serde_json::Value>,
+    #[serde(default)]
+    questions: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct AttemptMetaRaw {
+    id: i64,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    sumgrades: Option<f64>,
 }
 
 #[tool_router(router = quiz_router, vis = "pub(crate)")]
@@ -265,5 +300,67 @@ impl MoodleMcp {
         };
 
         self.ctx.ok_json(&response, "quiz_info", Some(&creds))
+    }
+
+    /// Revisa un intento terminado de cuestionario con sus preguntas y retroalimentación.
+    #[rmcp::tool(
+        name = "quiz_review",
+        description = "Revisa un intento finalizado de cuestionario, incluyendo la calificación y las preguntas analizadas con sus respuestas, estado y retroalimentación",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn quiz_review(&self, params: Parameters<QuizReviewParams>) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        let attempt_id_str = params.0.attemptid.to_string();
+        let page_str = params.0.page.unwrap_or(-1).to_string();
+        let query_review = [
+            ("wstoken", creds.token.as_str()),
+            ("wsfunction", "mod_quiz_get_attempt_review"),
+            ("moodlewsrestformat", "json"),
+            ("attemptid", attempt_id_str.as_str()),
+            ("page", page_str.as_str()),
+        ];
+
+        let review_resp: AttemptReviewRaw = match self
+            .ctx
+            .client
+            .post_webservice(&query_review, Priority::Interactive)
+            .await
+        {
+            Ok(r) => r,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        let grade = review_resp
+            .grade
+            .and_then(|v| {
+                if let Some(n) = v.as_f64() {
+                    Some(n)
+                } else if let Some(s) = v.as_str() {
+                    s.parse::<f64>().ok()
+                } else {
+                    None
+                }
+            })
+            .or(review_resp.attempt.sumgrades);
+
+        let parsed_questions = review_resp
+            .questions
+            .iter()
+            .map(parse_question)
+            .collect::<Vec<ParsedQuestion>>();
+
+        let response = QuizReviewResponse {
+            attemptid: review_resp.attempt.id,
+            state: review_resp.attempt.state,
+            grade,
+            questions: parsed_questions,
+        };
+
+        self.ctx.ok_json(&response, "quiz_review", Some(&creds))
     }
 }
