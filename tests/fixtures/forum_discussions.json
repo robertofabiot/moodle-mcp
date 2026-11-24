@@ -1,0 +1,47 @@
+{
+  "discussions": [
+    {
+      "id": 456,
+      "name": "Duda sobre el proyecto final",
+      "groupid": -1,
+      "timemodified": 1700000500,
+      "usermodified": 10002,
+      "timestart": 0,
+      "timeend": 0,
+      "discussion": 105,
+      "parent": 0,
+      "userid": 10002,
+      "created": 1700000100,
+      "modified": 1700000500,
+      "subject": "Duda sobre el proyecto final",
+      "message": "<p>¿Cuál es el formato de entrega para la <strong>parte práctica</strong>?</p>",
+      "messageformat": 1,
+      "userfullname": "Docente Ejemplo",
+      "numreplies": 2,
+      "pinned": true,
+      "locked": false
+    },
+    {
+      "id": 457,
+      "name": "Material de apoyo",
+      "groupid": -1,
+      "timemodified": 1700000200,
+      "usermodified": 10001,
+      "timestart": 0,
+      "timeend": 0,
+      "discussion": 106,
+      "parent": 0,
+      "userid": 10001,
+      "created": 1700000200,
+      "modified": 1700000200,
+      "subject": "Material de apoyo",
+      "message": "<p>Comparto el enlace de referencia.</p>",
+      "messageformat": 1,
+      "userfullname": "Estudiante Prueba",
+      "numreplies": 0,
+      "pinned": false,
+      "locked": true
+    }
+  ],
+  "warnings": []
+}

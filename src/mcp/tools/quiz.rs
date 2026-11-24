@@ -1,5 +1,6 @@
 use crate::content::{html_to_markdown, parse_question, ParsedQuestion};
 use crate::mcp::server::MoodleMcp;
+use crate::mcp::tools::extract_warnings;
 use crate::moodle::error::MoodleError;
 use crate::moodle::gate::Priority;
 use crate::moodle::ids::resolve_module;
@@ -249,33 +250,6 @@ struct AttemptMetaRaw {
     timeleft: Option<i64>,
     #[serde(default)]
     pages: Option<Vec<i64>>,
-}
-
-/// Extrae mensajes o códigos de advertencia devueltos por Moodle en array o campo warnings.
-fn extract_warnings(val: &serde_json::Value) -> Option<String> {
-    let mut warnings = Vec::new();
-    if let Some(arr) = val.as_array() {
-        for item in arr {
-            if let Some(msg) = item.get("message").and_then(|m| m.as_str()) {
-                warnings.push(msg.to_string());
-            } else if let Some(code) = item.get("warningcode").and_then(|c| c.as_str()) {
-                warnings.push(code.to_string());
-            }
-        }
-    } else if let Some(arr) = val.get("warnings").and_then(|w| w.as_array()) {
-        for item in arr {
-            if let Some(msg) = item.get("message").and_then(|m| m.as_str()) {
-                warnings.push(msg.to_string());
-            } else if let Some(code) = item.get("warningcode").and_then(|c| c.as_str()) {
-                warnings.push(code.to_string());
-            }
-        }
-    }
-    if warnings.is_empty() {
-        None
-    } else {
-        Some(warnings.join("; "))
-    }
 }
 
 /// Convierte el layout de Moodle (números y ceros delimitados por comas) en una lista de páginas (0-indexed).

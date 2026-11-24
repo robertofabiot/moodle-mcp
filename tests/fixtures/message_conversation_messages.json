@@ -1,0 +1,31 @@
+{
+  "id": 305,
+  "members": [
+    {
+      "id": 10001,
+      "fullname": "Estudiante Prueba",
+      "isonline": true,
+      "isblocked": false
+    },
+    {
+      "id": 10002,
+      "fullname": "Docente Ejemplo",
+      "isonline": false,
+      "isblocked": false
+    }
+  ],
+  "messages": [
+    {
+      "id": 9002,
+      "useridfrom": 10001,
+      "text": "<p>Gracias, lo enviaré hoy por la tarde.</p>",
+      "timecreated": 1700000600
+    },
+    {
+      "id": 9001,
+      "useridfrom": 10002,
+      "text": "<p>Recuerda entregar el <strong>informe</strong> mañana.</p>",
+      "timecreated": 1700000500
+    }
+  ]
+}

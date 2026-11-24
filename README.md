@@ -121,6 +121,14 @@ En tu archivo de configuración de Claude Desktop:
 | `quiz_save` | `attemptid: int`, `answers: object` | `destructive_hint = false` | Guarda respuestas intermedias en un intento de cuestionario inyectando automáticamente los campos ocultos y tokens de secuencia correspondientes. |
 | `quiz_finish` | `attemptid: int` | `destructive_hint = true` | Envía definitivamente un intento de cuestionario para su calificación, transmitiendo los campos ocultos y obteniendo la revisión final. |
 | `quiz_review` | `attemptid: int`, `page?: int` | `read_only_hint = true` | Obtiene la revisión de un intento terminado, devolviendo la nota final y las preguntas analizadas con sus opciones, estado y retroalimentación en Markdown. |
+| `forum_list` | `courseid: int` | `read_only_hint = true` | Lista los foros de un curso con su tipo, descripción en Markdown, cantidad de discusiones y fechas configuradas. |
+| `forum_list_discussions` | `cmid?: int`, `forumid?: int`, `page?: int`, `perpage?: int` | `read_only_hint = true` | Lista las discusiones de un foro aceptando `cmid` o `forumid`, con resúmenes en Markdown, autor, fechas y paginación. |
+| `forum_get_discussion` | `discussionid: int` | `read_only_hint = true` | Obtiene todos los mensajes de una discusión de foro en orden cronológico con su contenido en Markdown y archivos adjuntos. |
+| `forum_reply` | `postid: int`, `message: string`, `subject?: string`, `attachments?: string[]` | `destructive_hint = true` | Publica una respuesta en Markdown a un mensaje de foro, resolviendo automáticamente el asunto `"Re: <padre>"` si se omite y adjuntando archivos locales opcionales. |
+| `forum_new_discussion` | `cmid?: int`, `forumid?: int`, `subject: string`, `message: string`, `groupid?: int`, `attachments?: string[]` | `destructive_hint = true` | Abre un nuevo tema de discusión en un foro aceptando `cmid` o `forumid`, asunto, mensaje en Markdown, grupo opcional y archivos adjuntos. |
+| `list_conversations` | `limit?: int` | `read_only_hint = true` | Lista las conversaciones de mensajería privada del estudiante autenticado con participantes y el último mensaje convertido a Markdown. |
+| `get_conversation` | `conversationid: int`, `limit?: int` | `read_only_hint = true` | Obtiene los mensajes más recientes y los miembros de una conversación específica convirtiendo el contenido HTML a Markdown. |
+| `send_message` | `conversationid?: int`, `touserid?: int`, `text: string` | `destructive_hint = true` | Envía un mensaje privado en Markdown a una conversación existente (`conversationid`) o a un usuario destinatario (`touserid`) de forma mutuamente excluyente. |
 
 ---
 
