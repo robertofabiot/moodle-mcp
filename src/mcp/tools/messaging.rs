@@ -1,6 +1,8 @@
 use crate::content::{html_to_markdown, markdown_to_html};
 use crate::mcp::server::MoodleMcp;
-use crate::mcp::tools::{extract_warnings, format_epoch_iso};
+use crate::mcp::tools::{
+    deserialize_null_default, deserialize_opt_bool, extract_warnings, format_epoch_iso,
+};
 use crate::moodle::error::MoodleError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -107,7 +109,7 @@ pub struct SendMessageResponse {
 
 #[derive(Deserialize)]
 struct ConversationsRawResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     conversations: Vec<ConversationRaw>,
 }
 
@@ -122,17 +124,17 @@ struct ConversationRaw {
     conv_type: Option<i64>,
     #[serde(default)]
     membercount: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_bool")]
     ismuted: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_bool")]
     isfavourite: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_bool")]
     isread: Option<bool>,
     #[serde(default)]
     unreadcount: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     members: Vec<ConversationMemberRaw>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     messages: Vec<ConversationMessageRaw>,
     #[serde(default)]
     lastmessage: Option<String>,
@@ -140,20 +142,20 @@ struct ConversationRaw {
 
 #[derive(Deserialize)]
 struct ConversationMessagesRawResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     members: Vec<ConversationMemberRaw>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     messages: Vec<ConversationMessageRaw>,
 }
 
 #[derive(Deserialize)]
 struct ConversationMemberRaw {
     id: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     fullname: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_bool")]
     isonline: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_bool")]
     isblocked: Option<bool>,
 }
 
@@ -456,6 +458,17 @@ impl MoodleMcp {
             }
         };
 
+        if items.is_empty() {
+            return self.ctx.tool_error(
+                "protocol",
+                format!("Respuesta vacía de {function_name}: no se confirmó el envío del mensaje"),
+                None,
+                None,
+                None,
+                Some(&creds),
+            );
+        }
+
         let mut error_messages = Vec::new();
         for item in items {
             if let Some(err_msg) = item.get("errormessage").and_then(|v| v.as_str()) {
@@ -482,6 +495,16 @@ impl MoodleMcp {
                 .or_else(|| item.get("id"))
                 .and_then(|v| v.as_i64())
         });
+        if messageid.is_some_and(|id| id <= 0) {
+            return self.ctx.tool_error(
+                "api",
+                "Moodle rechazó el envío del mensaje sin detalle adicional",
+                None,
+                None,
+                None,
+                Some(&creds),
+            );
+        }
         let conversationid = first
             .and_then(|item| item.get("conversationid").and_then(|v| v.as_i64()))
             .or(target_conv_id);

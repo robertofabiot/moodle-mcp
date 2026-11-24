@@ -1,6 +1,9 @@
 use crate::content::{html_to_markdown, markdown_to_html};
+use crate::credentials::Credentials;
 use crate::mcp::server::MoodleMcp;
-use crate::mcp::tools::{extract_warnings, format_epoch_iso};
+use crate::mcp::tools::{
+    deserialize_null_default, deserialize_opt_bool, extract_warnings, format_epoch_iso,
+};
 use crate::moodle::error::MoodleError;
 use crate::moodle::ids::resolve_module;
 use rmcp::handler::server::wrapper::Parameters;
@@ -160,9 +163,13 @@ struct ForumItemRaw {
     coursemodule: Option<i64>,
     #[serde(default)]
     course: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     name: String,
-    #[serde(rename = "type", default)]
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_null_default"
+    )]
     forum_type: String,
     #[serde(default)]
     intro: Option<String>,
@@ -176,9 +183,9 @@ struct ForumItemRaw {
 
 #[derive(Deserialize)]
 struct ForumDiscussionsRawResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     discussions: Vec<ForumDiscussionRaw>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     warnings: Vec<serde_json::Value>,
 }
 
@@ -187,7 +194,7 @@ struct ForumDiscussionRaw {
     id: i64,
     #[serde(default)]
     discussion: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     name: String,
     #[serde(default)]
     subject: Option<String>,
@@ -201,15 +208,15 @@ struct ForumDiscussionRaw {
     modified: Option<i64>,
     #[serde(default)]
     numreplies: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_bool")]
     pinned: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_bool")]
     locked: Option<bool>,
 }
 
 #[derive(Deserialize)]
 struct ForumDiscussionPostsRawResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     posts: Vec<ForumPostRaw>,
 }
 
@@ -220,13 +227,13 @@ struct ForumPostRaw {
     parentid: Option<i64>,
     #[serde(default)]
     author: Option<ForumPostAuthorRaw>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     subject: String,
     #[serde(default)]
     message: Option<String>,
     #[serde(default)]
     timecreated: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     attachments: Vec<ForumAttachmentRaw>,
 }
 
@@ -250,6 +257,27 @@ struct ForumAttachmentRaw {
     mimetype: Option<String>,
 }
 
+/// Convierte las rutas de adjuntos y valida localmente que existan y sean archivos regulares
+/// antes de ejecutar peticiones de red hacia Moodle.
+fn validate_attachment_paths(attachments: Option<Vec<String>>) -> Result<Vec<PathBuf>, String> {
+    let paths: Vec<PathBuf> = attachments
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+
+    for path in &paths {
+        if !path.exists() || !path.is_file() {
+            return Err(format!(
+                "El archivo no existe o no es válido: {}",
+                path.display()
+            ));
+        }
+    }
+
+    Ok(paths)
+}
+
 /// Construye el asunto de respuesta anteponiendo "Re: " si el asunto padre no comienza ya con dicho prefijo.
 fn build_reply_subject(parent_subject: &str) -> String {
     let trimmed = parent_subject.trim();
@@ -262,6 +290,41 @@ fn build_reply_subject(parent_subject: &str) -> String {
         trimmed.to_string()
     } else {
         format!("Re: {trimmed}")
+    }
+}
+
+impl MoodleMcp {
+    /// Sube archivos adjuntos al área de borrador de Moodle si la lista no está vacía.
+    async fn upload_forum_attachments(
+        &self,
+        creds: &Credentials,
+        attachment_paths: &[PathBuf],
+    ) -> Result<Option<i64>, CallToolResult> {
+        if attachment_paths.is_empty() {
+            return Ok(None);
+        }
+
+        let base_url = Url::parse(self.ctx.client.base_url()).map_err(|e| {
+            self.ctx.tool_error(
+                "invalid_arguments",
+                format!("URL base de Moodle inválida: {e}"),
+                None,
+                None,
+                None,
+                Some(creds),
+            )
+        })?;
+
+        match self
+            .ctx
+            .file_client
+            .upload(&base_url, &creds.token, attachment_paths, None)
+            .await
+        {
+            Ok(res) => Ok(Some(res.itemid)),
+            Err(MoodleError::InvalidToken) => Err(self.ctx.handle_invalid_token().await),
+            Err(e) => Err(self.ctx.tool_error_from_moodle(&e, Some(creds))),
+        }
     }
 }
 
@@ -325,6 +388,11 @@ impl MoodleMcp {
                 }
             }
         } else {
+            if let Some(warn_msg) = extract_warnings(&raw_val) {
+                return self
+                    .ctx
+                    .tool_error("api", warn_msg, None, None, None, Some(&creds));
+            }
             return self.ctx.tool_error(
                 "protocol",
                 "Respuesta inesperada de mod_forum_get_forums_by_courses: se esperaba una lista de foros",
@@ -437,7 +505,10 @@ impl MoodleMcp {
             .into_iter()
             .map(|d| {
                 let timemodified = d.timemodified.or(d.modified).unwrap_or(0);
-                let subject = d.subject.unwrap_or_else(|| d.name.clone());
+                let subject = d
+                    .subject
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| d.name.clone());
                 ForumDiscussionSummary {
                     id: d.id,
                     discussion: d.discussion.unwrap_or(d.id),
@@ -527,7 +598,11 @@ impl MoodleMcp {
                     .map(|a| ForumAttachment {
                         filename: a.filename.unwrap_or_default(),
                         filesize: a.filesize,
-                        fileurl: a.fileurl.or(a.url).unwrap_or_default(),
+                        fileurl: a
+                            .fileurl
+                            .filter(|s| !s.is_empty())
+                            .or(a.url)
+                            .unwrap_or_default(),
                         mimetype: a.mimetype,
                     })
                     .collect();
@@ -578,6 +653,20 @@ impl MoodleMcp {
                 Some(&creds),
             );
         }
+
+        let attachment_paths = match validate_attachment_paths(params.0.attachments) {
+            Ok(paths) => paths,
+            Err(msg) => {
+                return self.ctx.tool_error(
+                    "invalid_arguments",
+                    msg,
+                    None,
+                    None,
+                    None,
+                    Some(&creds),
+                );
+            }
+        };
 
         let subject = match params
             .0
@@ -636,42 +725,13 @@ impl MoodleMcp {
             }
         };
 
-        let attachment_paths: Vec<PathBuf> = params
-            .0
-            .attachments
-            .unwrap_or_default()
-            .into_iter()
-            .map(PathBuf::from)
-            .collect();
-
-        let mut attachments_itemid: Option<i64> = None;
-        if !attachment_paths.is_empty() {
-            let base_url = match Url::parse(self.ctx.client.base_url()) {
-                Ok(u) => u,
-                Err(e) => {
-                    return self.ctx.tool_error(
-                        "invalid_arguments",
-                        format!("URL base de Moodle inválida: {e}"),
-                        None,
-                        None,
-                        None,
-                        Some(&creds),
-                    );
-                }
-            };
-
-            let upload = match self
-                .ctx
-                .file_client
-                .upload(&base_url, &creds.token, &attachment_paths, None)
-                .await
-            {
-                Ok(res) => res,
-                Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
-                Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
-            };
-            attachments_itemid = Some(upload.itemid);
-        }
+        let attachments_itemid = match self
+            .upload_forum_attachments(&creds, &attachment_paths)
+            .await
+        {
+            Ok(id) => id,
+            Err(err) => return err,
+        };
 
         let html = markdown_to_html(&params.0.message);
 
@@ -712,6 +772,7 @@ impl MoodleMcp {
         let created_postid = match resp
             .get("postid")
             .or_else(|| resp.get("id"))
+            .or_else(|| resp.get("post").and_then(|p| p.get("id")))
             .and_then(|v| v.as_i64())
         {
             Some(id) => id,
@@ -773,6 +834,20 @@ impl MoodleMcp {
             );
         }
 
+        let attachment_paths = match validate_attachment_paths(params.0.attachments) {
+            Ok(paths) => paths,
+            Err(msg) => {
+                return self.ctx.tool_error(
+                    "invalid_arguments",
+                    msg,
+                    None,
+                    None,
+                    None,
+                    Some(&creds),
+                );
+            }
+        };
+
         let resolved = match resolve_module(
             &self.ctx.client,
             &creds.token,
@@ -797,42 +872,13 @@ impl MoodleMcp {
             Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
         };
 
-        let attachment_paths: Vec<PathBuf> = params
-            .0
-            .attachments
-            .unwrap_or_default()
-            .into_iter()
-            .map(PathBuf::from)
-            .collect();
-
-        let mut attachments_itemid: Option<i64> = None;
-        if !attachment_paths.is_empty() {
-            let base_url = match Url::parse(self.ctx.client.base_url()) {
-                Ok(u) => u,
-                Err(e) => {
-                    return self.ctx.tool_error(
-                        "invalid_arguments",
-                        format!("URL base de Moodle inválida: {e}"),
-                        None,
-                        None,
-                        None,
-                        Some(&creds),
-                    );
-                }
-            };
-
-            let upload = match self
-                .ctx
-                .file_client
-                .upload(&base_url, &creds.token, &attachment_paths, None)
-                .await
-            {
-                Ok(res) => res,
-                Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
-                Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
-            };
-            attachments_itemid = Some(upload.itemid);
-        }
+        let attachments_itemid = match self
+            .upload_forum_attachments(&creds, &attachment_paths)
+            .await
+        {
+            Ok(id) => id,
+            Err(err) => return err,
+        };
 
         let html = markdown_to_html(&params.0.message);
 
@@ -874,7 +920,11 @@ impl MoodleMcp {
                 .tool_error("api", warn_msg, None, None, None, Some(&creds));
         }
 
-        let discussionid = match resp.get("discussionid").and_then(|v| v.as_i64()) {
+        let discussionid = match resp
+            .get("discussionid")
+            .or_else(|| resp.get("id"))
+            .and_then(|v| v.as_i64())
+        {
             Some(id) => id,
             None => {
                 return self.ctx.tool_error(
