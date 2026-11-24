@@ -6,7 +6,8 @@ use crate::moodle::error::MoodleError;
 use crate::moodle::gate::Priority;
 use rmcp::model::CallToolResult;
 use serde::Serialize;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 /// Origen de las credenciales activas en la sesión.
@@ -39,6 +40,8 @@ pub struct AppContext {
     pub session_source: RwLock<Option<SessionSource>>,
     /// Lector inyectado de variables de entorno (si existe).
     pub env_token_reader: Option<EnvTokenReader>,
+    /// Campos ocultos cacheados de cuestionarios indexados por attemptid (ej. sequencecheck).
+    pub quiz_hidden: Mutex<HashMap<i64, HashMap<String, String>>>,
 }
 
 impl AppContext {
@@ -57,6 +60,7 @@ impl AppContext {
             site_info: RwLock::new(None),
             session_source: RwLock::new(None),
             env_token_reader: None,
+            quiz_hidden: Mutex::new(HashMap::new()),
         }
     }
 
@@ -84,6 +88,7 @@ impl AppContext {
                 None
             }),
             env_token_reader: None,
+            quiz_hidden: Mutex::new(HashMap::new()),
         }
     }
 

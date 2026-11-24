@@ -49,6 +49,16 @@ async fn test_quiz_tools_annotations() {
         .as_ref()
         .expect("annotations de quiz_review");
     assert_eq!(review_ann.read_only_hint, Some(true));
+
+    // 3. quiz_start: destructive_hint = true
+    let start = tool_map
+        .get("quiz_start")
+        .expect("quiz_start debe estar registrada");
+    let start_ann = start
+        .annotations
+        .as_ref()
+        .expect("annotations de quiz_start");
+    assert_eq!(start_ann.destructive_hint, Some(true));
 }
 
 #[tokio::test]
@@ -385,4 +395,266 @@ async fn test_quiz_scrubs_token_in_error() {
     assert!(!raw_text.contains("tok123"));
     // Debe haber sido sanitizado a <token>
     assert!(raw_text.contains("<token>"));
+}
+
+#[tokio::test]
+async fn test_quiz_start_resumes_inprogress_attempt_without_start_attempt() {
+    let mock = MockServer::start().await;
+
+    // 1. Resolver cmid
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module",
+        ))
+        .and(body_string_contains("cmid=979333"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cmid_response(
+            979333,
+            68822,
+            8233,
+            "quiz",
+            "Cuestionario de Evaluación 1",
+        )))
+        .mount(&mock)
+        .await;
+
+    // 2. mod_quiz_get_quiz_access_information (sin SEB)
+    let access_info = json!({
+        "accessrules": [],
+        "preventaccessreasons": [],
+        "activerulenames": ["quizaccess_numattempts"],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_quiz_access_information",
+        ))
+        .and(body_string_contains("quizid=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(access_info.to_string()))
+        .mount(&mock)
+        .await;
+
+    // 3. mod_quiz_get_user_attempts con intento inprogress
+    let user_attempts = json!({
+        "attempts": [
+            {
+                "id": 101,
+                "quiz": 68822,
+                "state": "inprogress",
+                "timestart": 1700000000,
+                "timelimit": 3600,
+                "endtime": 1700003600,
+                "layout": "1,2,0,3,4,0"
+            }
+        ],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_user_attempts",
+        ))
+        .and(body_string_contains("quizid=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(user_attempts.to_string()))
+        .mount(&mock)
+        .await;
+
+    // 4. mod_quiz_start_attempt NUNCA debe ser llamado
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_start_attempt"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_start")
+                .with_arguments(json!({ "cmid": 979333 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool quiz_start");
+
+    assert!(!res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["attemptid"], 101);
+    assert_eq!(val["state"], "inprogress");
+    assert_eq!(val["timestart"], 1700000000);
+    assert_eq!(val["timelimit"], 3600);
+    assert_eq!(val["endtime"], 1700003600);
+    assert_eq!(val["pages"], json!([0, 1]));
+}
+
+#[tokio::test]
+async fn test_quiz_start_rejects_seb_with_impossible() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cmid_response(
+            979333,
+            68822,
+            8233,
+            "quiz",
+            "Cuestionario SEB",
+        )))
+        .mount(&mock)
+        .await;
+
+    // Regla SEB presente
+    let access_info_seb = json!({
+        "accessrules": ["Safe Exam Browser requerido"],
+        "preventaccessreasons": [],
+        "activerulenames": ["quizaccess_seb"],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_quiz_access_information",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(access_info_seb.to_string()))
+        .mount(&mock)
+        .await;
+
+    // start_attempt nunca debe llamarse
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_start_attempt"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_start")
+                .with_arguments(json!({ "cmid": 979333 }).as_object().unwrap().clone()),
+        )
+        .await
+        .expect("call_tool quiz_start con SEB");
+
+    assert!(res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["error"]["kind"], "impossible");
+    assert!(val["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Safe Exam Browser"));
+}
+
+#[tokio::test]
+async fn test_quiz_start_new_attempt_with_password() {
+    let mock = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=core_course_get_course_module_by_instance",
+        ))
+        .and(body_string_contains("instance=68822"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cmid_response(
+            979333,
+            68822,
+            8233,
+            "quiz",
+            "Cuestionario con Clave",
+        )))
+        .mount(&mock)
+        .await;
+
+    let access_info = json!({
+        "accessrules": ["Se requiere contraseña"],
+        "preventaccessreasons": [],
+        "activerulenames": ["quizaccess_password"],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_quiz_access_information",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(access_info.to_string()))
+        .mount(&mock)
+        .await;
+
+    // Sin intentos previos
+    let empty_attempts = json!({
+        "attempts": [],
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_user_attempts",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(empty_attempts.to_string()))
+        .mount(&mock)
+        .await;
+
+    // start_attempt con password en preflightdata
+    let start_response = json!({
+        "attempt": {
+            "id": 105,
+            "quiz": 68822,
+            "state": "inprogress",
+            "timestart": 1700000000,
+            "timelimit": 1800,
+            "endtime": 1700001800,
+            "layout": "1,0"
+        },
+        "warnings": []
+    });
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_start_attempt"))
+        .and(body_string_contains("quizid=68822"))
+        .and(body_string_contains(
+            "preflightdata%5B0%5D%5Bname%5D=quizpassword",
+        ))
+        .and(body_string_contains(
+            "preflightdata%5B0%5D%5Bvalue%5D=clave123",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string(start_response.to_string()))
+        .expect(1)
+        .mount(&mock)
+        .await;
+
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_start").with_arguments(
+                json!({ "quizid": 68822, "password": "clave123" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("call_tool quiz_start con password");
+
+    assert!(!res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+
+    assert_eq!(val["attemptid"], 105);
+    assert_eq!(val["state"], "inprogress");
+    assert_eq!(val["timestart"], 1700000000);
+    assert_eq!(val["timelimit"], 1800);
+    assert_eq!(val["endtime"], 1700001800);
+    assert_eq!(val["pages"], json!([0]));
 }

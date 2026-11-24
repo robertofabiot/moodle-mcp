@@ -47,6 +47,29 @@ pub struct QuizInfoResponse {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct QuizStartParams {
+    /// ID del módulo de curso (cmid). Mutuamente excluyente con quizid.
+    pub cmid: Option<i64>,
+    /// ID de la instancia del cuestionario (quizid). Mutuamente excluyente con cmid.
+    pub quizid: Option<i64>,
+    /// Contraseña requerida por el cuestionario si aplica.
+    pub password: Option<String>,
+    /// Si es true, fuerza la creación de un nuevo intento incluso si existe uno en progreso.
+    #[serde(default)]
+    pub forcenew: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct QuizStartResponse {
+    pub attemptid: i64,
+    pub state: String,
+    pub timestart: i64,
+    pub timelimit: i64,
+    pub endtime: i64,
+    pub pages: Vec<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct QuizReviewParams {
     /// ID del intento a revisar
     pub attemptid: i64,
@@ -110,7 +133,7 @@ struct QuizUserAttemptsResponse {
     attempts: Vec<QuizAttemptRaw>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct QuizAttemptRaw {
     id: i64,
     #[serde(default)]
@@ -121,6 +144,14 @@ struct QuizAttemptRaw {
     timestart: Option<i64>,
     #[serde(default)]
     timefinish: Option<i64>,
+    #[serde(default)]
+    layout: Option<String>,
+    #[serde(default)]
+    timelimit: Option<i64>,
+    #[serde(default)]
+    endtime: Option<i64>,
+    #[serde(default)]
+    pages: Option<Vec<i64>>,
 }
 
 #[derive(Deserialize)]
@@ -132,13 +163,77 @@ struct AttemptReviewRaw {
     questions: Vec<serde_json::Value>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct AttemptMetaRaw {
     id: i64,
     #[serde(default)]
     state: String,
     #[serde(default)]
     sumgrades: Option<f64>,
+    #[serde(default)]
+    timestart: Option<i64>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    timefinish: Option<i64>,
+    #[serde(default)]
+    layout: Option<String>,
+    #[serde(default)]
+    timelimit: Option<i64>,
+    #[serde(default)]
+    endtime: Option<i64>,
+    #[serde(default)]
+    pages: Option<Vec<i64>>,
+}
+
+/// Extrae mensajes o códigos de advertencia devueltos por Moodle en array o campo warnings.
+fn extract_warnings(val: &serde_json::Value) -> Option<String> {
+    let mut warnings = Vec::new();
+    if let Some(arr) = val.as_array() {
+        for item in arr {
+            if let Some(msg) = item.get("message").and_then(|m| m.as_str()) {
+                warnings.push(msg.to_string());
+            } else if let Some(code) = item.get("warningcode").and_then(|c| c.as_str()) {
+                warnings.push(code.to_string());
+            }
+        }
+    } else if let Some(arr) = val.get("warnings").and_then(|w| w.as_array()) {
+        for item in arr {
+            if let Some(msg) = item.get("message").and_then(|m| m.as_str()) {
+                warnings.push(msg.to_string());
+            } else if let Some(code) = item.get("warningcode").and_then(|c| c.as_str()) {
+                warnings.push(code.to_string());
+            }
+        }
+    }
+    if warnings.is_empty() {
+        None
+    } else {
+        Some(warnings.join("; "))
+    }
+}
+
+/// Convierte el layout de Moodle (números y ceros delimitados por comas) en una lista de páginas (0-indexed).
+pub fn parse_layout_pages(layout: &str) -> Vec<i64> {
+    let mut pages = Vec::new();
+    let mut current_page = 0;
+    let mut page_has_questions = false;
+
+    for part in layout.split(',') {
+        let part = part.trim();
+        if part == "0" {
+            pages.push(current_page);
+            current_page += 1;
+            page_has_questions = false;
+        } else if !part.is_empty() {
+            page_has_questions = true;
+        }
+    }
+
+    if page_has_questions || pages.is_empty() {
+        pages.push(current_page);
+    }
+
+    pages
 }
 
 #[tool_router(router = quiz_router, vis = "pub(crate)")]
@@ -300,6 +395,235 @@ impl MoodleMcp {
         };
 
         self.ctx.ok_json(&response, "quiz_info", Some(&creds))
+    }
+
+    /// Inicia un nuevo intento o retoma uno en curso para un cuestionario.
+    #[rmcp::tool(
+        name = "quiz_start",
+        description = "Inicia un nuevo intento de resolución o retoma uno en curso, soportando contraseña y verificando restricciones como Safe Exam Browser",
+        annotations(destructive_hint = true)
+    )]
+    pub async fn quiz_start(&self, params: Parameters<QuizStartParams>) -> CallToolResult {
+        let creds = match self.ctx.session().await {
+            Ok(c) => c,
+            Err(err) => return err,
+        };
+
+        let module_ref = match resolve_module(
+            &self.ctx.client,
+            &creds.token,
+            "quiz",
+            params.0.cmid,
+            params.0.quizid,
+        )
+        .await
+        {
+            Ok(m) => m,
+            Err(MoodleError::InvalidArguments(msg)) => {
+                return self.ctx.tool_error(
+                    "invalid_arguments",
+                    msg,
+                    None,
+                    None,
+                    None,
+                    Some(&creds),
+                );
+            }
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        let instance_str = module_ref.instance.to_string();
+        let query_access = [
+            ("wstoken", creds.token.as_str()),
+            ("wsfunction", "mod_quiz_get_quiz_access_information"),
+            ("moodlewsrestformat", "json"),
+            ("quizid", instance_str.as_str()),
+        ];
+
+        let access_info: QuizAccessInfoResponse = match self
+            .ctx
+            .client
+            .post_webservice(&query_access, Priority::Interactive)
+            .await
+        {
+            Ok(r) => r,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        if access_info
+            .activerulenames
+            .iter()
+            .any(|r| r == "quizaccess_seb")
+        {
+            return self.ctx.tool_error(
+                "impossible",
+                "este cuestionario exige Safe Exam Browser; no puede hacerse por la API",
+                None,
+                None,
+                None,
+                Some(&creds),
+            );
+        }
+
+        let query_attempts = [
+            ("wstoken", creds.token.as_str()),
+            ("wsfunction", "mod_quiz_get_user_attempts"),
+            ("moodlewsrestformat", "json"),
+            ("quizid", instance_str.as_str()),
+            ("status", "all"),
+        ];
+
+        let attempts_resp: QuizUserAttemptsResponse = match self
+            .ctx
+            .client
+            .post_webservice(&query_attempts, Priority::Interactive)
+            .await
+        {
+            Ok(r) => r,
+            Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+            Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+        };
+
+        let forcenew = params.0.forcenew.unwrap_or(false);
+        let existing_attempt = if !forcenew {
+            attempts_resp
+                .attempts
+                .into_iter()
+                .find(|a| a.state == "inprogress" || a.state == "overdue")
+        } else {
+            None
+        };
+
+        let (attemptid, state, timestart, layout, raw_timelimit, raw_endtime, explicit_pages) =
+            if let Some(att) = existing_attempt {
+                (
+                    att.id,
+                    att.state,
+                    att.timestart.unwrap_or(0),
+                    att.layout,
+                    att.timelimit,
+                    att.endtime,
+                    att.pages,
+                )
+            } else {
+                let mut start_params = serde_json::Map::new();
+                start_params.insert("quizid".to_string(), serde_json::json!(module_ref.instance));
+                if forcenew {
+                    start_params.insert("forcenew".to_string(), serde_json::json!(1));
+                }
+                if let Some(pw) = params.0.password.as_deref() {
+                    start_params.insert(
+                        "preflightdata".to_string(),
+                        serde_json::json!([
+                            { "name": "quizpassword", "value": pw }
+                        ]),
+                    );
+                }
+
+                let start_val = match self
+                    .ctx
+                    .write_client
+                    .call_raw(&creds.token, "mod_quiz_start_attempt", &start_params)
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(MoodleError::InvalidToken) => return self.ctx.handle_invalid_token().await,
+                    Err(e) => return self.ctx.tool_error_from_moodle(&e, Some(&creds)),
+                };
+
+                if let Some(warn_msg) = extract_warnings(&start_val) {
+                    return self
+                        .ctx
+                        .tool_error("api", warn_msg, None, None, None, Some(&creds));
+                }
+
+                let started_attempt: AttemptMetaRaw = match start_val
+                    .get("attempt")
+                    .and_then(|a| serde_json::from_value(a.clone()).ok())
+                {
+                    Some(a) => a,
+                    None => match serde_json::from_value(start_val) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            return self.ctx.tool_error(
+                                "protocol",
+                                format!("Respuesta de mod_quiz_start_attempt inválida: {e}"),
+                                None,
+                                None,
+                                None,
+                                Some(&creds),
+                            );
+                        }
+                    },
+                };
+
+                (
+                    started_attempt.id,
+                    started_attempt.state,
+                    started_attempt.timestart.unwrap_or(0),
+                    started_attempt.layout,
+                    started_attempt.timelimit,
+                    started_attempt.endtime,
+                    started_attempt.pages,
+                )
+            };
+
+        let pages =
+            explicit_pages.unwrap_or_else(|| parse_layout_pages(layout.as_deref().unwrap_or("")));
+
+        let (timelimit, endtime) = if let (Some(tl), Some(et)) = (raw_timelimit, raw_endtime) {
+            (tl, et)
+        } else if let Some(tl) = raw_timelimit {
+            let et = if tl > 0 { timestart + tl } else { 0 };
+            (tl, et)
+        } else if let Some(et) = raw_endtime {
+            let tl = et.saturating_sub(timestart);
+            (tl, et)
+        } else {
+            let course_str = module_ref.course.to_string();
+            let query_quizzes = [
+                ("wstoken", creds.token.as_str()),
+                ("wsfunction", "mod_quiz_get_quizzes_by_courses"),
+                ("moodlewsrestformat", "json"),
+                ("courseids[0]", course_str.as_str()),
+            ];
+            if let Ok(quiz_list) = self
+                .ctx
+                .client
+                .post_webservice::<QuizListResponse>(&query_quizzes, Priority::Interactive)
+                .await
+            {
+                if let Some(q) = quiz_list
+                    .quizzes
+                    .into_iter()
+                    .find(|q| q.id == module_ref.instance)
+                {
+                    let tl = q.timelimit.unwrap_or(0);
+                    let et = if tl > 0 {
+                        timestart + tl
+                    } else {
+                        q.timeclose.unwrap_or(0)
+                    };
+                    (tl, et)
+                } else {
+                    (0, 0)
+                }
+            } else {
+                (0, 0)
+            }
+        };
+
+        let response = QuizStartResponse {
+            attemptid,
+            state,
+            timestart,
+            timelimit,
+            endtime,
+            pages,
+        };
+
+        self.ctx.ok_json(&response, "quiz_start", Some(&creds))
     }
 
     /// Revisa un intento terminado de cuestionario con sus preguntas y retroalimentación.
