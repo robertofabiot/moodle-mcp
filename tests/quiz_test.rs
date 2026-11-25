@@ -1036,6 +1036,7 @@ async fn test_quiz_finish_success_with_review() {
         .and(body_string_contains("finishattempt=1"))
         .and(body_string_contains("timeup=0"))
         .and(body_string_contains("q101%3A1_%3Asequencecheck"))
+        .and(body_string_contains("q101%3A1_answer"))
         .respond_with(ResponseTemplate::new(200).set_body_string(process_response.to_string()))
         .expect(1)
         .mount(&mock)
@@ -1059,6 +1060,11 @@ async fn test_quiz_finish_success_with_review() {
         let map = guard.entry(101).or_default();
         map.insert("q101:1_:sequencecheck".to_string(), "2".to_string());
     }
+    {
+        let mut guard = ctx.quiz_answers.lock().unwrap();
+        let map = guard.entry(101).or_default();
+        map.insert("q101:1_answer".to_string(), "1".to_string());
+    }
 
     let res = client
         .call_tool(
@@ -1080,6 +1086,8 @@ async fn test_quiz_finish_success_with_review() {
     // Validar que se limpiaron los campos en memoria
     let hidden_guard = ctx.quiz_hidden.lock().unwrap();
     assert!(hidden_guard.get(&101).is_none());
+    let answers_guard = ctx.quiz_answers.lock().unwrap();
+    assert!(answers_guard.get(&101).is_none());
 }
 
 #[tokio::test]
@@ -1292,6 +1300,7 @@ async fn test_quiz_full_attempt_lifecycle_flow() {
         .and(body_string_contains("finishattempt=1"))
         .and(body_string_contains("timeup=0"))
         .and(body_string_contains("q101%3A1_%3Asequencecheck"))
+        .and(body_string_contains("q101%3A1_answer"))
         .respond_with(ResponseTemplate::new(200).set_body_string(process_response.to_string()))
         .expect(1)
         .mount(&mock)
@@ -1395,4 +1404,206 @@ async fn test_quiz_full_attempt_lifecycle_flow() {
         let guard = ctx.quiz_hidden.lock().unwrap();
         assert!(guard.get(&101).is_none());
     }
+}
+
+/// Cuerpos de las peticiones recibidas que invocan `wsfunction`.
+async fn bodies_for(mock: &MockServer, wsfunction: &str) -> Vec<String> {
+    let needle = format!("wsfunction={wsfunction}");
+    mock.received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| String::from_utf8_lossy(&r.body).into_owned())
+        .filter(|b| b.contains(&needle))
+        .collect()
+}
+
+async fn mount_process_attempt(mock: &MockServer, state: &str) {
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_process_attempt"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(json!({ "state": state, "warnings": [] }).to_string()),
+        )
+        .expect(1)
+        .mount(mock)
+        .await;
+}
+
+async fn mount_review(mock: &MockServer, status: u16) {
+    let template = if status == 200 {
+        ResponseTemplate::new(200).set_body_string(FIXTURE_QUIZ_REVIEW)
+    } else {
+        ResponseTemplate::new(status)
+    };
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains(
+            "wsfunction=mod_quiz_get_attempt_review",
+        ))
+        .respond_with(template)
+        .mount(mock)
+        .await;
+}
+
+async fn call_quiz_finish(
+    client: &RunningService<RoleClient, ()>,
+    attemptid: i64,
+) -> serde_json::Value {
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_finish").with_arguments(
+                json!({ "attemptid": attemptid })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("call_tool quiz_finish");
+    assert!(!res.is_error.unwrap_or(false));
+    serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap()
+}
+
+/// Moodle descarta el autoguardado de una pregunta que llega con `:sequencecheck` y sin
+/// respuesta. Sin respuestas en memoria, el cierre no debe enviar campos de esa pregunta.
+#[tokio::test]
+async fn test_quiz_finish_without_saved_answers_omits_sequencecheck() {
+    let mock = MockServer::start().await;
+    mount_process_attempt(&mock, "finished").await;
+    mount_review(&mock, 200).await;
+
+    let (client, ctx) = start_server_and_ctx(&mock).await;
+    {
+        let mut guard = ctx.quiz_hidden.lock().unwrap();
+        let map = guard.entry(101).or_default();
+        map.insert("q101:1_:sequencecheck".to_string(), "1".to_string());
+        map.insert("q101:1_:flagged".to_string(), "0".to_string());
+    }
+
+    let val = call_quiz_finish(&client, 101).await;
+    assert_eq!(val["finished"], true);
+
+    let bodies = bodies_for(&mock, "mod_quiz_process_attempt").await;
+    assert_eq!(bodies.len(), 1);
+    assert!(bodies[0].contains("finishattempt=1"));
+    assert!(
+        !bodies[0].contains("q101%3A1_"),
+        "no debe enviar campos de preguntas sin respuesta: {}",
+        bodies[0]
+    );
+}
+
+/// Solo se reenvían los campos ocultos de las preguntas respondidas, y cada pregunta lleva su
+/// última respuesta guardada.
+#[tokio::test]
+async fn test_quiz_finish_resends_latest_answers_only_for_answered_questions() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/webservice/rest/server.php"))
+        .and(body_string_contains("wsfunction=mod_quiz_save_attempt"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(json!({ "status": true, "warnings": [] }).to_string()),
+        )
+        .expect(2)
+        .mount(&mock)
+        .await;
+    mount_process_attempt(&mock, "finished").await;
+    mount_review(&mock, 200).await;
+
+    let (client, ctx) = start_server_and_ctx(&mock).await;
+    {
+        let mut guard = ctx.quiz_hidden.lock().unwrap();
+        let map = guard.entry(101).or_default();
+        map.insert("q101:1_:sequencecheck".to_string(), "1".to_string());
+        map.insert("q101:2_:sequencecheck".to_string(), "1".to_string());
+    }
+
+    // La pregunta 1 tenía dos casillas marcadas y luego solo una.
+    for answers in [
+        json!({ "q101:1_choice0": "1", "q101:1_choice1": "1" }),
+        json!({ "q101:1_choice0": "1" }),
+    ] {
+        let res = client
+            .call_tool(
+                CallToolRequestParams::new("quiz_save").with_arguments(
+                    json!({ "attemptid": 101, "answers": answers })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .expect("call_tool quiz_save");
+        assert!(!res.is_error.unwrap_or(false));
+    }
+
+    let val = call_quiz_finish(&client, 101).await;
+    assert_eq!(val["finished"], true);
+
+    let bodies = bodies_for(&mock, "mod_quiz_process_attempt").await;
+    assert_eq!(bodies.len(), 1);
+    let body = &bodies[0];
+    assert!(body.contains("q101%3A1_choice0"));
+    assert!(
+        !body.contains("q101%3A1_choice1"),
+        "la respuesta reemplazada no debe reenviarse: {body}"
+    );
+    assert!(body.contains("q101%3A1_%3Asequencecheck"));
+    assert!(
+        !body.contains("q101%3A2_"),
+        "la pregunta 2 no tiene respuesta y no debe enviarse: {body}"
+    );
+}
+
+/// Si el intento no queda cerrado y la revisión falla, la respuesta lo dice y la memoria se
+/// conserva para reintentar.
+#[tokio::test]
+async fn test_quiz_finish_not_finished_keeps_cache_and_reports_state() {
+    let mock = MockServer::start().await;
+    mount_process_attempt(&mock, "overdue").await;
+    mount_review(&mock, 500).await;
+
+    let (client, ctx) = start_server_and_ctx(&mock).await;
+    {
+        let mut guard = ctx.quiz_answers.lock().unwrap();
+        guard
+            .entry(101)
+            .or_default()
+            .insert("q101:1_answer".to_string(), "1".to_string());
+    }
+
+    let val = call_quiz_finish(&client, 101).await;
+    assert_eq!(val["finished"], false);
+    assert_eq!(val["state"], "overdue");
+    assert!(val.get("grade").is_none());
+
+    let guard = ctx.quiz_answers.lock().unwrap();
+    assert!(guard.get(&101).is_some());
+}
+
+#[tokio::test]
+async fn test_quiz_save_rejects_empty_answers() {
+    let mock = MockServer::start().await;
+    let client = start_server(&mock).await;
+
+    let res = client
+        .call_tool(
+            CallToolRequestParams::new("quiz_save").with_arguments(
+                json!({ "attemptid": 101, "answers": {} })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await
+        .expect("call_tool quiz_save vacío");
+
+    assert!(res.is_error.unwrap_or(false));
+    let val: serde_json::Value =
+        serde_json::from_str(&res.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(val["error"]["kind"], "invalid_arguments");
+    assert!(bodies_for(&mock, "mod_quiz_save_attempt").await.is_empty());
 }
