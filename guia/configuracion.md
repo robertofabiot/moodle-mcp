@@ -10,6 +10,8 @@ moodle-mcp logout     # borra la sesión guardada
 
 `login` cambia tu contraseña por un token de Moodle y guarda solo el token. La contraseña no pasa por el modelo ni queda en disco. Si el servidor ya está corriendo dentro de un cliente y el token vence, ejecuta `login` en cualquier terminal: la siguiente llamada usa la sesión nueva sin reiniciar nada.
 
+Puedes tener sesión en varios Moodle a la vez, una por URL. Sin `--base-url` ni `MOODLE_BASE_URL`, los comandos usan la única sesión guardada; si hay varias o ninguna, usan la URL por defecto. El archivo `moodle-mcp/sessions.json` del directorio de configuración lista las URLs con sesión, sin tokens.
+
 `logout` borra la sesión de tu equipo, pero el token sigue siendo válido en Moodle. Para revocarlo, abre **Preferencias → Claves de seguridad** en el sitio y restablece la clave del servicio móvil.
 
 ## Almacén de credenciales
@@ -28,7 +30,7 @@ Usa el mismo `--store` en `login` y en `serve`.
 
 | Variable | Por defecto | Uso |
 |---|---|---|
-| `MOODLE_BASE_URL` | — | URL de tu Moodle. Equivale a `--base-url`. |
+| `MOODLE_BASE_URL` | — | URL de tu Moodle. Equivale a `--base-url` y tiene prioridad sobre la sesión guardada. |
 | `MOODLE_TOKEN` | — | Usa este token en lugar del guardado. |
 | `MOODLE_PRIVATE_TOKEN` | — | Token privado de la sesión. Se sanea en las respuestas igual que el token. |
 | `MOODLE_MCP_DOWNLOAD_DIR` | `~/Downloads/moodle-mcp` | Carpeta de descargas, cursos replicados y respuestas extensas. |
