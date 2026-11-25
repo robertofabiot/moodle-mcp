@@ -1,14 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="96 96 320 320" width="320" height="320">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="122 114 271 285" width="271" height="285">
   <title>moodle-mcp</title>
   <defs>
-    <linearGradient id="traza" x1="0" y1="140" x2="0" y2="400" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFA800"/>
-      <stop offset="1" stop-color="#FF6B00"/>
-    </linearGradient>
+    <linearGradient id="puente" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFA800"/><stop offset="1" stop-color="#FF6B00"/></linearGradient>
   </defs>
-  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M152 316V164L256 300 360 164V316" stroke="#4A5263" stroke-width="82"/>
-    <path d="M152 316V164L256 300 360 164V316" stroke="#323A48" stroke-width="76"/>
-    <path d="M152 384V164L256 300 360 164V384" stroke="url(#traza)" stroke-width="28"/>
+  <g>
+    <polygon points="189,145 134,145 161,126.1 216,126.1" fill="#FFFFFF"/>
+    <polygon points="189,387 189,145 216,126.1 216,368.1" fill="#9EA5B3"/>
+    <polygon points="134,387 189,387 189,145 134,145" fill="#E9EBF0"/>
+    <polygon points="299,145 299,237.4 313.9,227 313.9,134.6" fill="#A8430A"/>
+    <polygon points="189,145 244,246.2 258.9,235.8 203.9,134.6" fill="#A8430A"/>
+    <polygon points="299,237.4 244,338.6 258.9,328.2 313.9,227" fill="#A8430A"/>
+    <polygon points="189,145 244,246.2 299,145 299,237.4 244,338.6 189,237.4" fill="url(#puente)"/>
+    <polygon points="354,145 299,145 326,126.1 381,126.1" fill="#FFFFFF"/>
+    <polygon points="354,387 354,145 381,126.1 381,368.1" fill="#9EA5B3"/>
+    <polygon points="299,387 354,387 354,145 299,145" fill="#E9EBF0"/>
   </g>
 </svg>
