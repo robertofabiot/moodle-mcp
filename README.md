@@ -38,7 +38,7 @@ Funciona con cualquier Moodle que tenga habilitados los servicios web móviles, 
 | Área | Qué cubre |
 |---|---|
 | **Cursos y notas** | Temarios, cambios recientes, calificaciones con retroalimentación y próximas fechas de entrega. |
-| **Archivos** | Descarga y lectura de PDF, Word, PowerPoint, HTML e imágenes. Réplica incremental de un curso completo en tu disco. |
+| **Archivos** | Descarga y lectura de PDF, Word, PowerPoint, HTML e imágenes con `moodle_view`. Réplica incremental de un curso completo en tu disco. |
 | **Tareas** | Enunciados, requisitos y estado. Entregas con archivos o texto, como borrador o definitivas. |
 | **Cuestionarios** | Reglas e historial de intentos. Inicio, respuesta, envío y revisión. |
 | **Foros y mensajes** | Lectura de discusiones y conversaciones. Respuestas, temas nuevos y mensajes privados. |
