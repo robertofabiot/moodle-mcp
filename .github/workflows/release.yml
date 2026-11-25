@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  build:
+    name: Compilar ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Compilar con Cargo.lock
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Empaquetar para Linux o macOS
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          "target/$TARGET/release/moodle-mcp" --version
+          mkdir -p dist bundle
+          cp "target/$TARGET/release/moodle-mcp" README.md bundle/
+          archive="moodle-mcp-$TARGET.tar.gz"
+          tar -czf "dist/$archive" -C bundle moodle-mcp README.md
+          cd dist
+          shasum -a 256 "$archive" > "$archive.sha256"
+
+      - name: Empaquetar para Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "target/$env:TARGET/release/moodle-mcp.exe"
+          & $binary --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path dist | Out-Null
+          $archive = "moodle-mcp-$env:TARGET.zip"
+          Compress-Archive -LiteralPath @($binary, "README.md") -DestinationPath "dist/$archive"
+          $hash = (Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content "dist/$archive.sha256" -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moodle-mcp-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+  attach:
+    name: Adjuntar paquetes al borrador
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: moodle-mcp-*
+          path: dist
+          merge-multiple: true
+
+      - name: Comprobar la autoría del borrador
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          drafts=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.draft) | [.tag_name, .author.login] | @tsv')
+          if ! grep -Fx "$GITHUB_REF_NAME"$'\t'"$REPOSITORY_OWNER" <<< "$drafts" > /dev/null; then
+            echo "::error::Crea un borrador de release para $GITHUB_REF_NAME desde la cuenta propietaria antes de adjuntar archivos."
+            exit 1
+          fi
+
+      - name: Adjuntar binarios y sumas
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
