@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="96 96 320 320" width="320" height="320">
+  <title>moodle-mcp</title>
+  <defs>
+    <linearGradient id="traza" x1="0" y1="140" x2="0" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFA800"/>
+      <stop offset="1" stop-color="#FF6B00"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M152 316V164L256 300 360 164V316" stroke="#4A5263" stroke-width="82"/>
+    <path d="M152 316V164L256 300 360 164V316" stroke="#323A48" stroke-width="76"/>
+    <path d="M152 384V164L256 300 360 164V384" stroke="url(#traza)" stroke-width="28"/>
+  </g>
+</svg>
