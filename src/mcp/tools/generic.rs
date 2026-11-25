@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::sync::{Arc, LazyLock};
 
+const BROWSER_FALLBACK_HINT: &str =
+    "Usa moodle_open_in_browser para continuar en el navegador si tienes la URL de Moodle o el cmid de la actividad.";
+
 static CATALOG: LazyLock<Value> = LazyLock::new(|| {
     let raw = include_str!("../../../catalog/functions.json");
     serde_json::from_str(raw).unwrap_or_else(|e| {
@@ -223,7 +226,7 @@ impl MoodleMcp {
                     format!("La función '{function}' no está habilitada en este sitio de Moodle"),
                     None,
                     None,
-                    None,
+                    Some(BROWSER_FALLBACK_HINT.into()),
                     Some(&creds),
                 );
             }
@@ -280,7 +283,7 @@ impl MoodleMcp {
                     format!("La función '{function}' no está habilitada en este sitio de Moodle"),
                     None,
                     None,
-                    None,
+                    Some(BROWSER_FALLBACK_HINT.into()),
                     Some(&creds),
                 );
             }

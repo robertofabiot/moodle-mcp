@@ -19,6 +19,7 @@ impl MoodleMcp {
             ctx,
             tool_router: Self::generic_router()
                 + Self::files_router()
+                + Self::browser_router()
                 + Self::sync_router()
                 + Self::courses_router()
                 + Self::assignments_router()
