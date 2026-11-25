@@ -179,6 +179,12 @@ async fn test_function_not_in_list_returns_not_enabled() {
     let text = result.content[0].as_text().unwrap();
     let env: ToolErrorEnvelope = serde_json::from_str(&text.text).unwrap();
     assert_eq!(env.error.kind, "not_enabled");
+    assert!(env
+        .error
+        .hint
+        .as_deref()
+        .unwrap()
+        .contains("moodle_open_in_browser"));
     assert!(env.error.message.contains("no está habilitada"));
 
     // Probar con moodle_call
@@ -188,6 +194,12 @@ async fn test_function_not_in_list_returns_not_enabled() {
     let text = result.content[0].as_text().unwrap();
     let env: ToolErrorEnvelope = serde_json::from_str(&text.text).unwrap();
     assert_eq!(env.error.kind, "not_enabled");
+    assert!(env
+        .error
+        .hint
+        .as_deref()
+        .unwrap()
+        .contains("moodle_open_in_browser"));
 }
 
 #[tokio::test]
