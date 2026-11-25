@@ -294,6 +294,20 @@ impl AppContext {
         }
     }
 
+    /// Formatea una respuesta de éxito combinando metadatos JSON saneados y una imagen
+    /// en línea codificada en base64 estándar sin prefijo `data:...`.
+    pub fn ok_json_with_image<T: Serialize>(
+        &self,
+        value: &T,
+        base64_data: String,
+        mime: &str,
+        creds: Option<&Credentials>,
+    ) -> CallToolResult {
+        let tok = creds.map(|c| c.token.as_str());
+        let priv_tok = creds.and_then(|c| c.private_token.as_deref());
+        crate::mcp::output::ok_json_with_image(value, base64_data, mime, tok, priv_tok)
+    }
+
     /// Genera una respuesta de error MCP tipada y sanitizada.
     pub fn tool_error(
         &self,

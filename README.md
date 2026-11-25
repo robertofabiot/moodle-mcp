@@ -105,7 +105,8 @@ En tu archivo de configuración de Claude Desktop:
 | `moodle_describe_function` | `name: string` | `read_only_hint = true` | Describe si una función está habilitada, si es de lectura y sugiere cómo inspeccionar parámetros requeridos. |
 | `moodle_read` | `function: string`, `params?: object` | `read_only_hint = true`, `open_world_hint = true` | Invoca una función del web service garantizando que sea de solo lectura. Rechaza funciones de mutación con error `invalid_arguments`. |
 | `moodle_call` | `function: string`, `params?: object` | `destructive_hint = true`, `open_world_hint = true` | Invoca cualquier función habilitada del web service (lectura o mutación). Utiliza un cliente con 0 reintentos si la función muta datos. |
-| `moodle_download` | `url: string`, `dest?: string` | `read_only_hint = false`, `destructive_hint = false`, `idempotent_hint = true` | Descarga cualquier archivo de Moodle (recursos, tareas, adjuntos) a disco local. Si el archivo es texto o HTML menor al límite, incluye su representación en Markdown. |
+| `moodle_download` | `url: string`, `dest?: string`, `inline?: bool` | `read_only_hint = false`, `destructive_hint = false`, `idempotent_hint = true` | Descarga cualquier archivo de Moodle (recursos, tareas, adjuntos) a disco local. Si el archivo es texto o HTML menor al límite, incluye su representación en Markdown; con `inline = true`, aplica el visor de contenidos directamente sobre el archivo descargado. |
+| `moodle_view` | `path?: string`, `url?: string` | `read_only_hint = false`, `destructive_hint = false`, `idempotent_hint = true` | Visualiza un archivo local (`path`) o remoto de Moodle (`url`), extrayendo texto/Markdown de PDF, DOCX, PPTX, HTML y texto plano (guardando a `<archivo>.txt` si desborda el límite) o devolviendo imágenes raster (PNG, JPEG, GIF, WebP) en línea dentro del límite configurado. |
 | `moodle_upload` | `paths: string[]`, `itemid?: int` | `destructive_hint = false` | Sube uno o más archivos locales al área de borrador (`draft`) de Moodle vía `upload.php`, devolviendo el `itemid` para entregas o foros. |
 | `moodle_sync_course` | `courseid: int`, `dest?: string` | `read_only_hint = false`, `destructive_hint = false`, `idempotent_hint = true` | Revisa y replica incrementalmente todos los contenidos y archivos de un curso a disco local, manteniendo un manifiesto `.moodle-sync.json` y listando enlaces externos en `enlaces.md`. |
 | `list_courses` | `include_past?: bool` | `read_only_hint = true` | Lista los cursos matriculados del estudiante, filtrando activos por defecto o incluyendo pasados con `include_past = true`. |
@@ -141,3 +142,10 @@ Puedes personalizar el comportamiento de `moodle-mcp` mediante variables de ento
 - `MOODLE_PRIVATE_TOKEN`: Token privado (`privatetoken`) devuelto en el inicio de sesión de Moodle, utilizado exclusivamente para generar claves de inicio de sesión automático en el navegador.
 - `MOODLE_MCP_DOWNLOAD_DIR`: Directorio base para descargas y respuestas truncadas (por defecto `~/Downloads/moodle-mcp`).
 - `MOODLE_MCP_MAX_RESPONSE_BYTES`: Tamaño máximo en bytes de una respuesta antes de truncarla y guardarla en archivo (por defecto `60000`).
+- `MOODLE_MCP_MAX_INLINE_IMAGE_BYTES`: Tamaño máximo en bytes para incrustar imágenes raster (PNG, JPEG, GIF, WebP) en línea dentro de la respuesta MCP (por defecto `1000000`).
+
+---
+
+## Trabajo Futuro
+
+- **Recursos MCP (`moodle://…`)**: la exposición de cursos, temarios y archivos mediante URIs de recursos MCP (`moodle://…`) queda fuera del alcance de la versión `0.1.0` y se deja planteada como trabajo futuro; en esta versión toda la inspección y visualización de archivos se realiza mediante herramientas (`moodle_view`, `moodle_download`, `moodle_sync_course`).

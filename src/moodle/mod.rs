@@ -22,7 +22,10 @@ pub use course_tree::{ContentEntry, Module, Section};
 pub use courses::{ModuleInfo, MoodleAssignment, MoodleCourse};
 pub use envelope::decode_envelope;
 pub use error::{MoodleError, Result};
-pub use files::{authorize_file_url, sanitize_filename, DownloadedFile, FileClient, UploadResult};
+pub use files::{
+    authorize_file_url, normalize_mime, resolve_mime, sanitize_filename, DownloadedFile,
+    FileClient, UploadResult,
+};
 pub use gate::{GatePermit, MoodleGate, Priority};
 pub use ids::{resolve_cmid, resolve_instance, resolve_module, CourseModuleRef};
 pub use metrics::{RequestCounters, RequestCounts};

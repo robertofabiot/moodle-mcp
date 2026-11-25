@@ -65,6 +65,45 @@ pub fn sanitize_filename(filename: &str) -> String {
     }
 }
 
+/// Normaliza un tipo MIME eliminando parámetros (`; charset=...`), convirtiendo a minúsculas
+/// y unificando alias comunes (`image/jpg` -> `image/jpeg`).
+pub fn normalize_mime(raw: &str) -> String {
+    let base = raw
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if base == "image/jpg" {
+        "image/jpeg".to_string()
+    } else {
+        base
+    }
+}
+
+/// Resuelve el tipo MIME efectivo de un archivo a partir de la cabecera HTTP opcional
+/// y la extensión de la ruta en disco.
+///
+/// Normaliza a minúsculas sin parámetros, mapea `image/jpg` a `image/jpeg` y recurre
+/// a `mime_guess` cuando la cabecera está ausente, vacía o es genérica
+/// (`application/octet-stream` o `binary/octet-stream`).
+pub fn resolve_mime(path: &Path, header_mime: Option<&str>) -> String {
+    if let Some(raw) = header_mime {
+        let normalized = normalize_mime(raw);
+        if !normalized.is_empty()
+            && normalized != "application/octet-stream"
+            && normalized != "binary/octet-stream"
+        {
+            return normalized;
+        }
+    }
+
+    let guessed = mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .to_string();
+    normalize_mime(&guessed)
+}
+
 /// Autoriza una URL de archivo para Moodle:
 /// 1. Verifica que el esquema, host y puerto coincidan exactamente con `base_url`.
 /// 2. Verifica que la ruta comience con la ruta de `base_url`. Si no, retorna `MoodleError::InvalidArguments`.
@@ -357,18 +396,7 @@ impl FileClient {
                 .extend_pairs(clean_pairs);
         }
 
-        let mime = if !content_type.is_empty() {
-            content_type
-                .split(';')
-                .next()
-                .unwrap_or(&content_type)
-                .trim()
-                .to_string()
-        } else {
-            mime_guess::from_path(&dest_path)
-                .first_or_octet_stream()
-                .to_string()
-        };
+        let mime = resolve_mime(&dest_path, Some(&content_type));
 
         Ok(DownloadedFile {
             path: dest_path,
@@ -600,5 +628,35 @@ mod tests {
             "tok_abc",
         );
         assert!(matches!(err_path, Err(MoodleError::InvalidArguments(_))));
+    }
+
+    #[test]
+    fn test_resolve_mime_normalizes_and_falls_back() {
+        assert_eq!(
+            resolve_mime(Path::new("guia.bin"), Some("TEXT/HTML; charset=UTF-8")),
+            "text/html"
+        );
+        assert_eq!(
+            resolve_mime(Path::new("foto.jpg"), Some("image/jpg; charset=binary")),
+            "image/jpeg"
+        );
+        assert_eq!(
+            resolve_mime(Path::new("clase.pdf"), Some("application/octet-stream")),
+            "application/pdf"
+        );
+        assert_eq!(
+            resolve_mime(Path::new("diapos.pptx"), Some("binary/octet-stream")),
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        );
+        assert_eq!(
+            resolve_mime(Path::new("documento.docx"), Some("   ")),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(resolve_mime(Path::new("imagen.png"), None), "image/png");
+        assert_eq!(resolve_mime(Path::new("foto.jpg"), None), "image/jpeg");
+        assert_eq!(
+            resolve_mime(Path::new("archivo_sin_extension"), None),
+            "application/octet-stream"
+        );
     }
 }
