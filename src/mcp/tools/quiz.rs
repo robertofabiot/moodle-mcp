@@ -89,6 +89,50 @@ pub struct QuizPageResponse {
     pub questions: Vec<ParsedQuestion>,
 }
 
+/// Prefijo de pregunta de un campo de Moodle: `q101:1_answer` → `q101:1_`.
+fn question_prefix(name: &str) -> &str {
+    match name.find('_') {
+        Some(idx) => &name[..=idx],
+        None => name,
+    }
+}
+
+/// Convierte el valor JSON de una respuesta al texto que espera Moodle.
+fn answer_value_to_string(val: &serde_json::Value) -> String {
+    match val {
+        serde_json::Value::Bool(b) => if *b { "1" } else { "0" }.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// Une las respuestas con los campos ocultos de las mismas preguntas y los ordena por nombre.
+///
+/// Solo incluye campos ocultos de preguntas que tienen respuesta. Moodle procesa toda pregunta
+/// que llega con `:sequencecheck`, y si llega sin respuesta descarta su autoguardado.
+fn build_question_data(
+    answers: &HashMap<String, String>,
+    hidden: &HashMap<String, String>,
+) -> Vec<serde_json::Value> {
+    let prefixes: Vec<&str> = answers.keys().map(|k| question_prefix(k)).collect();
+    let mut data: HashMap<&str, &str> = answers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    for (hk, hv) in hidden {
+        if prefixes.iter().any(|p| hk.starts_with(p)) {
+            data.entry(hk.as_str()).or_insert(hv.as_str());
+        }
+    }
+    let mut keys: Vec<&str> = data.keys().copied().collect();
+    keys.sort_unstable();
+    keys.into_iter()
+        .map(|k| serde_json::json!({ "name": k, "value": data[k] }))
+        .collect()
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QuizSaveParams {
     /// ID del intento activo
@@ -742,6 +786,19 @@ impl MoodleMcp {
             Err(err) => return err,
         };
 
+        if params.0.answers.is_empty() {
+            return self.ctx.tool_error(
+                "invalid_arguments",
+                "answers no puede estar vacío",
+                None,
+                None,
+                Some(
+                    "Indica al menos una respuesta, por ejemplo {\"q101:1_answer\": \"1\"}".into(),
+                ),
+                Some(&creds),
+            );
+        }
+
         // 1. Si no hay campos ocultos en memoria para el intento, intentar precargar la página 0
         let needs_fetch = {
             let guard = self.ctx.quiz_hidden.lock().unwrap();
@@ -778,36 +835,12 @@ impl MoodleMcp {
             }
         }
 
-        // 2. Construir mapa de datos con respuestas y campos ocultos
-        let mut data_map: HashMap<String, String> = HashMap::new();
-        for (name, val) in &params.0.answers {
-            let val_str = match val {
-                serde_json::Value::Bool(b) => {
-                    if *b {
-                        "1".to_string()
-                    } else {
-                        "0".to_string()
-                    }
-                }
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Null => String::new(),
-                other => other.to_string(),
-            };
-            data_map.insert(name.clone(), val_str);
-        }
-
-        let answer_prefixes: Vec<String> = params
+        // 2. Construir los datos con las respuestas y los campos ocultos de esas preguntas
+        let answers: HashMap<String, String> = params
             .0
             .answers
-            .keys()
-            .map(|k| {
-                if let Some(idx) = k.find('_') {
-                    k[..=idx].to_string()
-                } else {
-                    k.clone()
-                }
-            })
+            .iter()
+            .map(|(k, v)| (k.clone(), answer_value_to_string(v)))
             .collect();
 
         let cached_hidden = {
@@ -815,34 +848,15 @@ impl MoodleMcp {
             guard.get(&params.0.attemptid).cloned().unwrap_or_default()
         };
 
-        for (hk, hv) in cached_hidden {
-            let matches = if answer_prefixes.is_empty() {
-                true
-            } else {
-                answer_prefixes.iter().any(|p| hk.starts_with(p))
-            };
-            if matches {
-                data_map.entry(hk).or_insert(hv);
-            }
-        }
-
         let mut save_params = serde_json::Map::new();
         save_params.insert(
             "attemptid".to_string(),
             serde_json::json!(params.0.attemptid),
         );
-
-        let mut data_arr = Vec::new();
-        let mut sorted_keys: Vec<_> = data_map.keys().cloned().collect();
-        sorted_keys.sort();
-        for k in sorted_keys {
-            let v = data_map.get(&k).unwrap();
-            data_arr.push(serde_json::json!({
-                "name": k,
-                "value": v,
-            }));
-        }
-        save_params.insert("data".to_string(), serde_json::Value::Array(data_arr));
+        save_params.insert(
+            "data".to_string(),
+            serde_json::Value::Array(build_question_data(&answers, &cached_hidden)),
+        );
 
         let save_resp = match self
             .ctx
@@ -861,6 +875,18 @@ impl MoodleMcp {
                 .tool_error("api", warn_msg, None, None, None, Some(&creds));
         }
 
+        // Recordar las últimas respuestas de cada pregunta para reenviarlas en quiz_finish
+        {
+            let mut guard = self.ctx.quiz_answers.lock().unwrap();
+            let stored = guard.entry(params.0.attemptid).or_default();
+            let prefixes: Vec<String> = answers
+                .keys()
+                .map(|k| question_prefix(k).to_string())
+                .collect();
+            stored.retain(|k, _| !prefixes.iter().any(|p| k.starts_with(p.as_str())));
+            stored.extend(answers);
+        }
+
         let response = QuizSaveResponse {
             saved: true,
             attemptid: params.0.attemptid,
@@ -872,7 +898,7 @@ impl MoodleMcp {
     /// Finaliza y envía a calificación definitiva un intento de cuestionario.
     #[rmcp::tool(
         name = "quiz_finish",
-        description = "Envía definitivamente un intento de cuestionario para su calificación, transmitiendo los campos ocultos y obteniendo la revisión final",
+        description = "Envía definitivamente un intento de cuestionario para su calificación, reenviando las respuestas guardadas con quiz_save en esta sesión, y devuelve la revisión final. finished solo es true si Moodle confirma el estado finished",
         annotations(destructive_hint = true)
     )]
     pub async fn quiz_finish(&self, params: Parameters<QuizFinishParams>) -> CallToolResult {
@@ -885,6 +911,10 @@ impl MoodleMcp {
             let guard = self.ctx.quiz_hidden.lock().unwrap();
             guard.get(&params.0.attemptid).cloned().unwrap_or_default()
         };
+        let cached_answers = {
+            let guard = self.ctx.quiz_answers.lock().unwrap();
+            guard.get(&params.0.attemptid).cloned().unwrap_or_default()
+        };
 
         let mut proc_params = serde_json::Map::new();
         proc_params.insert(
@@ -893,18 +923,12 @@ impl MoodleMcp {
         );
         proc_params.insert("finishattempt".to_string(), serde_json::json!(1));
         proc_params.insert("timeup".to_string(), serde_json::json!(0));
-
-        let mut data_arr = Vec::new();
-        let mut sorted_keys: Vec<_> = cached_hidden.keys().cloned().collect();
-        sorted_keys.sort();
-        for k in sorted_keys {
-            let v = cached_hidden.get(&k).unwrap();
-            data_arr.push(serde_json::json!({
-                "name": k,
-                "value": v,
-            }));
-        }
-        proc_params.insert("data".to_string(), serde_json::Value::Array(data_arr));
+        // Reenvía las respuestas guardadas en esta sesión. Las preguntas sin respuesta en memoria
+        // no se envían: Moodle las omite y conserva su autoguardado al cerrar el intento.
+        proc_params.insert(
+            "data".to_string(),
+            serde_json::Value::Array(build_question_data(&cached_answers, &cached_hidden)),
+        );
 
         let proc_resp = match self
             .ctx
@@ -959,21 +983,30 @@ impl MoodleMcp {
                 let st = proc_resp
                     .get("state")
                     .and_then(|s| s.as_str())
-                    .unwrap_or("finished")
+                    .unwrap_or("desconocido")
                     .to_string();
                 (st, None)
             }
         };
 
-        // Limpiar campos ocultos cacheados de la memoria
-        self.ctx
-            .quiz_hidden
-            .lock()
-            .unwrap()
-            .remove(&params.0.attemptid);
+        // Limpiar la memoria solo si el intento quedó cerrado. Si quedó en otro estado (por
+        // ejemplo `overdue`), las respuestas siguen haciendo falta para un nuevo quiz_finish.
+        let finished = state == "finished";
+        if finished {
+            self.ctx
+                .quiz_hidden
+                .lock()
+                .unwrap()
+                .remove(&params.0.attemptid);
+            self.ctx
+                .quiz_answers
+                .lock()
+                .unwrap()
+                .remove(&params.0.attemptid);
+        }
 
         let response = QuizFinishResponse {
-            finished: true,
+            finished,
             attemptid: params.0.attemptid,
             state,
             grade,
