@@ -122,25 +122,10 @@ pub fn authorize_file_url(base_url: &Url, file_url_str: &str, token: &str) -> Re
         }
     };
 
-    if url.scheme() != base_url.scheme()
-        || url.host_str() != base_url.host_str()
-        || url.port_or_known_default() != base_url.port_or_known_default()
-    {
+    if !crate::moodle::is_moodle_site_url(base_url, &url) {
         return Err(MoodleError::InvalidArguments(
             "URL externa: no se envía el token".into(),
         ));
-    }
-
-    let base_path = base_url.path().trim_end_matches('/');
-    if !base_path.is_empty() {
-        let url_path = url.path();
-        let matches_subpath =
-            url_path == base_path || url_path.starts_with(&format!("{base_path}/"));
-        if !matches_subpath {
-            return Err(MoodleError::InvalidArguments(
-                "URL externa: no se envía el token".into(),
-            ));
-        }
     }
 
     let path = url.path().to_string();
