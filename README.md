@@ -23,7 +23,7 @@
 
 Moodle tiene una API completa, pero tu asistente de IA no tiene forma de usarla. moodle-mcp hace de puente: inicias sesión una vez en la terminal y el asistente puede leer tus cursos, descargar el material, revisar tus notas y, cuando se lo pides, entregar una tarea o responder en un foro. Todo con los permisos de tu propia cuenta.
 
-Está pensado para UAM Virtual y funciona con cualquier Moodle que tenga habilitados los servicios web móviles.
+Funciona con cualquier Moodle que tenga habilitados los servicios web móviles, los mismos que usa la app oficial.
 
 ## Qué le puedes pedir
 
@@ -54,16 +54,16 @@ La lista completa está en la [referencia de herramientas](guia/herramientas.md)
 cargo install --git https://github.com/robertofabiot/moodle-mcp --locked
 ```
 
-**2. Inicia sesión.** La contraseña se pide en la terminal y nunca llega al modelo.
+**2. Inicia sesión** en tu Moodle. La contraseña se pide en la terminal y nunca llega al modelo.
 
 ```bash
-moodle-mcp login
+moodle-mcp --base-url https://moodle.tu-institucion.edu login
 ```
 
-**3. Conecta tu cliente.** En Claude Code:
+**3. Conecta tu cliente** con la misma URL. En Claude Code:
 
 ```bash
-claude mcp add moodle -- moodle-mcp serve
+claude mcp add moodle -- moodle-mcp --base-url https://moodle.tu-institucion.edu serve
 ```
 
 Para [Claude Desktop](guia/clientes.md#claude-desktop), [Cursor](guia/clientes.md#cursor), [Codex](guia/clientes.md#codex) y [Antigravity](guia/clientes.md#antigravity), consulta la [guía de clientes](guia/clientes.md).
@@ -87,4 +87,4 @@ Los detalles de privacidad, el almacén de credenciales y las variables de entor
 | [Desarrollo](guia/desarrollo.md) | Estructura del código, pruebas y publicación de versiones. |
 | [Marca](guia/marca.md) | Logo, colores y tipografía. |
 
-<sub>Hecho para UAM Virtual · Las novedades de cada versión están en [Releases](https://github.com/robertofabiot/moodle-mcp/releases)</sub>
+<sub>Las novedades de cada versión están en [Releases](https://github.com/robertofabiot/moodle-mcp/releases)</sub>

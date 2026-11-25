@@ -6,14 +6,14 @@ moodle-mcp funciona con cualquier cliente MCP que lance servidores por `stdio`. 
 moodle-mcp serve
 ```
 
-Antes de conectarlo, inicia sesión una vez con `moodle-mcp login`. El servidor lee la sesión guardada y, si la renuevas con otro `login`, la recarga en la siguiente llamada sin reiniciar el cliente.
+Los ejemplos lo muestran así para abreviar: agrega la [URL de tu Moodle](#url-de-tu-moodle) antes de `serve`. Antes de conectarlo, inicia sesión una vez con `moodle-mcp login`. El servidor lee la sesión guardada y, si la renuevas con otro `login`, la recarga en la siguiente llamada sin reiniciar el cliente.
 
 - [Claude Code](#claude-code)
 - [Claude Desktop](#claude-desktop)
 - [Cursor](#cursor)
 - [Codex](#codex)
 - [Antigravity](#antigravity)
-- [Otra instalación de Moodle](#otra-instalación-de-moodle)
+- [URL de tu Moodle](#url-de-tu-moodle)
 - [Si el cliente no encuentra el comando](#si-el-cliente-no-encuentra-el-comando)
 
 ## Claude Code
@@ -89,9 +89,9 @@ El comando guarda el servidor en `~/.gemini/config/mcp_config.json`.
 
 Guarda el archivo y actualiza la lista de servidores.
 
-## Otra instalación de Moodle
+## URL de tu Moodle
 
-Por defecto se usa UAM Virtual (`https://uamvirtual.uam.edu.ni/grado`). Para otro sitio, pasa `--base-url` tanto a `login` como a `serve`:
+Indica la URL de tu Moodle con `--base-url`, tanto en `login` como en `serve`, o defínela una sola vez en la variable `MOODLE_BASE_URL`:
 
 ```bash
 moodle-mcp --base-url https://moodle.example.edu login

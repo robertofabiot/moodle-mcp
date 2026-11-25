@@ -28,7 +28,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Ninguna prueba usa la red: todas corren contra un Moodle simulado. La prueba en vivo de `tests/moodle_live.rs` está marcada con `#[ignore]` y lee `UAM_TEST_WSTOKEN` de `.env`. Las capturas reales van en `tests/fixtures_raw/`, que Git ignora, y se anonimizan antes de pasarlas a `tests/fixtures/`. `fixtures_hygiene_test.rs` comprueba que no queden datos personales.
+Ninguna prueba usa la red: todas corren contra un Moodle simulado. La prueba en vivo de `tests/moodle_live.rs` está marcada con `#[ignore]` y lee el token de prueba de `.env`. Las capturas reales van en `tests/fixtures_raw/`, que Git ignora, y se anonimizan antes de pasarlas a `tests/fixtures/`. `fixtures_hygiene_test.rs` comprueba que no queden datos personales.
 
 ## Publicar una versión
 
