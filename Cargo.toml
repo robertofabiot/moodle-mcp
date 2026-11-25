@@ -2,6 +2,9 @@
 name = "moodle-mcp"
 version = "0.1.0"
 edition = "2021"
+description = "Servidor MCP y CLI para Moodle"
+repository = "https://github.com/robertofabiot/moodle-mcp"
+readme = "README.md"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std", "fs", "io-util"] }
