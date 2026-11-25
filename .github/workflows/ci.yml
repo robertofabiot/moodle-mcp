@@ -31,6 +31,9 @@ jobs:
       - name: Lint with Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Build with Cargo.lock
+        run: cargo build --locked
+
       - name: Run unit tests
         run: cargo test --verbose
 
