@@ -534,6 +534,29 @@ async fn test_moodle_view_document_overflow_saves_txt_without_double_truncation(
     assert!(saved_small.contains("<token>"));
     assert!(saved_small.contains("fin_del_documento"));
     assert!(!dir_small.path().join("responses").exists());
+
+    // Los caracteres escapados en JSON pueden superar el límite aunque el texto original quepa.
+    let escaped_path = dir.path().join("saltos.txt");
+    let escaped_text = "línea\n".repeat(55);
+    assert!(escaped_text.len() < max_resp);
+    std::fs::write(&escaped_path, &escaped_text).unwrap();
+    let escaped_result = client
+        .call_tool(
+            CallToolRequestParams::new("moodle_view").with_arguments(args_obj(serde_json::json!({
+                "path": escaped_path
+            }))),
+        )
+        .await
+        .unwrap();
+    let escaped_response = &escaped_result.content[0].as_text().unwrap().text;
+    let escaped_json: Value = serde_json::from_str(escaped_response).unwrap();
+    assert_eq!(escaped_json["truncated"], true);
+    assert!(escaped_response.len() <= max_resp);
+    assert_eq!(
+        std::fs::read_to_string(escaped_json["text_saved_to"].as_str().unwrap()).unwrap(),
+        escaped_text
+    );
+    assert!(!dir.path().join("responses").exists());
 }
 
 #[tokio::test]

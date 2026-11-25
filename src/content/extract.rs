@@ -4,10 +4,17 @@ use crate::moodle::files::normalize_mime;
 use quick_xml::escape::resolve_xml_entity;
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::Path;
 use zip::result::ZipError;
-use zip::ZipArchive;
+use zip::{read::ZipFile, ZipArchive};
+
+/// Límite máximo de bytes descomprimidos por archivo XML interno en OOXML (64 MiB)
+/// para evitar agotamiento de memoria ante archivos ZIP maliciosos.
+const MAX_OOXML_XML_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Límite máximo acumulado de bytes descomprimidos entre todas las diapositivas de un PPTX (128 MiB).
+const MAX_OOXML_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Tipo MIME estándar para documentos PDF.
 pub const MIME_PDF: &str = "application/pdf";
@@ -139,13 +146,35 @@ fn map_zip_error(err: ZipError) -> MoodleError {
     }
 }
 
+fn extract_ooxml_entry<R: Read>(
+    entry: ZipFile<'_, R>,
+    remaining_bytes: &mut u64,
+) -> Result<Option<String>> {
+    let limit = MAX_OOXML_XML_BYTES.min(*remaining_bytes);
+    let limit_error =
+        || MoodleError::Protocol("El XML del documento supera el límite de descompresión".into());
+    if entry.size() > limit {
+        return Err(limit_error());
+    }
+
+    let mut bounded = entry.take(limit + 1);
+    let text = extract_xml_text(BufReader::new(&mut bounded));
+    let bytes_read = limit + 1 - bounded.limit();
+    if bytes_read > limit {
+        return Err(limit_error());
+    }
+    *remaining_bytes -= bytes_read;
+    text
+}
+
 fn extract_docx_sync(path: &Path) -> Result<Option<String>> {
     let file = std::fs::File::open(path).map_err(MoodleError::from)?;
     let mut archive = ZipArchive::new(file).map_err(map_zip_error)?;
     let entry = archive
         .by_name("word/document.xml")
         .map_err(map_zip_error)?;
-    extract_xml_text(BufReader::new(entry))
+    let mut remaining_bytes = MAX_OOXML_XML_BYTES;
+    extract_ooxml_entry(entry, &mut remaining_bytes)
 }
 
 fn parse_pptx_slide_number(name: &str) -> Option<u32> {
@@ -169,9 +198,10 @@ fn extract_pptx_sync(path: &Path) -> Result<Option<String>> {
     slides.sort_by_key(|(n, _)| *n);
 
     let mut sections = Vec::new();
+    let mut remaining_bytes = MAX_OOXML_TOTAL_BYTES;
     for (num, entry_name) in slides {
         let entry = archive.by_name(&entry_name).map_err(map_zip_error)?;
-        if let Some(slide_text) = extract_xml_text(BufReader::new(entry))? {
+        if let Some(slide_text) = extract_ooxml_entry(entry, &mut remaining_bytes)? {
             sections.push(format!("## Diapositiva {num}\n{slide_text}"));
         }
     }
@@ -191,25 +221,32 @@ fn extract_xml_text<R: std::io::BufRead>(reader: R) -> Result<Option<String>> {
     let mut buf = Vec::new();
     let mut out = String::new();
     let mut in_text = false;
+    let mut depth = 0;
 
     loop {
         match xml.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => match e.local_name().as_ref() {
-                "t" => in_text = true,
-                "br" | "cr" => out.push('\n'),
-                "tab" => out.push('\t'),
-                _ => {}
-            },
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                match e.local_name().as_ref() {
+                    "t" => in_text = true,
+                    "br" | "cr" => out.push('\n'),
+                    "tab" => out.push('\t'),
+                    _ => {}
+                }
+            }
             Ok(Event::Empty(e)) => match e.local_name().as_ref() {
                 "p" | "br" | "cr" => out.push('\n'),
                 "tab" => out.push('\t'),
                 _ => {}
             },
-            Ok(Event::End(e)) => match e.local_name().as_ref() {
-                "t" => in_text = false,
-                "p" => out.push('\n'),
-                _ => {}
-            },
+            Ok(Event::End(e)) => {
+                depth -= 1;
+                match e.local_name().as_ref() {
+                    "t" => in_text = false,
+                    "p" => out.push('\n'),
+                    _ => {}
+                }
+            }
             Ok(Event::Text(e)) if in_text => {
                 out.push_str(&e.xml10_content());
             }
@@ -242,6 +279,12 @@ fn extract_xml_text<R: std::io::BufRead>(reader: R) -> Result<Option<String>> {
             }
         }
         buf.clear();
+    }
+
+    if depth != 0 {
+        return Err(MoodleError::Protocol(
+            "XML incompleto al extraer texto del documento".into(),
+        ));
     }
 
     if out.trim().is_empty() {
@@ -306,6 +349,26 @@ mod tests {
             writer.write_all(body.as_bytes()).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn test_ooxml_entries_share_the_decompression_budget() {
+        let first = "<p><t>primera</t></p>";
+        let second = "<p><t>segunda</t></p>";
+        let data = build_zip(&[("primera.xml", first), ("segunda.xml", second)]);
+        let mut zip = ZipArchive::new(std::io::Cursor::new(data)).unwrap();
+        let mut remaining_bytes = (first.len() + second.len() - 1) as u64;
+
+        let entry = zip.by_name("primera.xml").unwrap();
+        assert_eq!(
+            extract_ooxml_entry(entry, &mut remaining_bytes).unwrap(),
+            Some("primera".into())
+        );
+        let entry = zip.by_name("segunda.xml").unwrap();
+        assert!(matches!(
+            extract_ooxml_entry(entry, &mut remaining_bytes),
+            Err(MoodleError::Protocol(_))
+        ));
     }
 
     #[tokio::test]
@@ -379,6 +442,16 @@ mod tests {
         std::fs::write(
             &bad_xml_docx,
             build_zip(&[("word/document.xml", "<w:document><w:p></w:document>")]),
+        )
+        .unwrap();
+        assert!(matches!(
+            extract_text(&bad_xml_docx, MIME_DOCX).await,
+            Err(MoodleError::Protocol(_))
+        ));
+
+        std::fs::write(
+            &bad_xml_docx,
+            build_zip(&[("word/document.xml", "<w:document><w:p><w:t>parcial</w:t>")]),
         )
         .unwrap();
         assert!(matches!(

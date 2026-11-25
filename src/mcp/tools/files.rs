@@ -10,6 +10,7 @@ use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncReadExt;
 use url::Url;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -63,11 +64,11 @@ struct ViewImageOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct ViewDocumentOutput {
-    path: String,
-    mime: String,
+struct ViewDocumentOutput<'a> {
+    path: &'a str,
+    mime: &'a str,
     size: u64,
-    content_markdown: String,
+    content_markdown: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -199,14 +200,21 @@ impl MoodleMcp {
                 return self.ctx.ok_json(&out, tool_name, creds);
             }
 
-            let bytes = match tokio::fs::read(path).await {
-                Ok(b) => b,
+            let file = match tokio::fs::File::open(path).await {
+                Ok(file) => file,
                 Err(e) => {
                     return self
                         .ctx
                         .tool_error_from_moodle(&MoodleError::from(e), creds);
                 }
             };
+            let mut bytes = Vec::new();
+            let read_limit = (self.ctx.config.max_inline_image_bytes as u64).saturating_add(1);
+            if let Err(e) = file.take(read_limit).read_to_end(&mut bytes).await {
+                return self
+                    .ctx
+                    .tool_error_from_moodle(&MoodleError::from(e), creds);
+            }
 
             if bytes.len() > self.ctx.config.max_inline_image_bytes {
                 let out = ViewNoteOutput {
@@ -222,7 +230,7 @@ impl MoodleMcp {
             let out = ViewImageOutput {
                 path: path_display,
                 mime: norm_mime.clone(),
-                size,
+                size: bytes.len() as u64,
                 inline_image: true,
             };
             return self
@@ -249,15 +257,26 @@ impl MoodleMcp {
             let tok = creds.map(|c| c.token.as_str());
             let priv_tok = creds.and_then(|c| c.private_token.as_deref());
             let scrubbed_text = crate::mcp::output::scrub(&text, tok, priv_tok);
+            let path_scrubbed = crate::mcp::output::scrub(&path_display, tok, priv_tok);
 
             if scrubbed_text.len() <= self.ctx.config.max_response_bytes {
                 let out = ViewDocumentOutput {
-                    path: path_display,
-                    mime: norm_mime,
+                    path: &path_scrubbed,
+                    mime: &norm_mime,
                     size,
-                    content_markdown: scrubbed_text,
+                    content_markdown: &scrubbed_text,
                 };
-                return self.ctx.ok_json(&out, tool_name, creds);
+                let serialized = match serde_json::to_string(&out) {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        let error =
+                            MoodleError::Protocol(format!("Error al serializar respuesta: {e}"));
+                        return self.ctx.tool_error_from_moodle(&error, creds);
+                    }
+                };
+                if serialized.len() <= self.ctx.config.max_response_bytes {
+                    return crate::mcp::output::tool_success(&serialized, tok, priv_tok);
+                }
             }
 
             let text_path = saved_text_path(path);
@@ -275,7 +294,6 @@ impl MoodleMcp {
                 );
             }
 
-            let path_scrubbed = crate::mcp::output::scrub(&path_display, tok, priv_tok);
             let text_saved_to =
                 crate::mcp::output::scrub(&text_path.to_string_lossy(), tok, priv_tok);
 
