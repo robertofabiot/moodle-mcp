@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use moodle_mcp::config::{normalize_base_url, Config};
-use moodle_mcp::credentials::{resolve_credentials, CredentialStore, Credentials, StoreKind};
+use moodle_mcp::credentials::{
+    no_session_hint, resolve_credentials, CredentialStore, Credentials, StoreKind,
+};
 use moodle_mcp::mcp::{AppContext, MoodleMcp};
 use moodle_mcp::moodle::client::{MoodleClient, MoodleClientBuilder};
 use moodle_mcp::moodle::gate::Priority;
@@ -48,11 +50,19 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let mut config = Config::from_env();
+    let store = CredentialStore::new(cli.store);
+
+    // Sin URL explícita, la única sesión guardada manda sobre la URL por defecto.
+    let env_base_url = std::env::var("MOODLE_BASE_URL")
+        .ok()
+        .filter(|url| !url.trim().is_empty());
     if let Some(ref base) = cli.base_url {
         config.base_url = normalize_base_url(base);
+    } else if env_base_url.is_none() {
+        if let [only] = store.saved_sites().await.as_slice() {
+            config.base_url = only.clone();
+        }
     }
-
-    let store = CredentialStore::new(cli.store);
 
     match cli.command {
         Some(Commands::Login { username }) => {
@@ -105,7 +115,9 @@ async fn main() -> anyhow::Result<()> {
             let creds = match resolve_credentials(&config, &store, &client).await {
                 Ok(Some(c)) => c,
                 Ok(None) => {
-                    eprintln!("No hay sesión activa. Ejecuta 'moodle-mcp login' primero.");
+                    let saved = store.saved_sites().await;
+                    eprintln!("No hay sesión guardada para {}.", config.base_url);
+                    eprintln!("{}.", no_session_hint(&config.base_url, &saved));
                     std::process::exit(1);
                 }
                 Err(e) => {
@@ -139,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
                         .unwrap_or_else(|_| "moodle_mcp=info".into()),
                 )
                 .init();
+            tracing::info!("Moodle: {}", config.base_url);
 
             let client = MoodleClient::from_builder(
                 MoodleClientBuilder::new().base_url(config.base_url.clone()),
