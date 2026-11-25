@@ -31,3 +31,16 @@ pub use ids::{resolve_cmid, resolve_instance, resolve_module, CourseModuleRef};
 pub use metrics::{RequestCounters, RequestCounts};
 pub use params::flatten_params;
 pub use submissions::{strip_html_to_plain_text, SubmissionStatus};
+
+/// Comprueba el origen y el subdirectorio de la instalación de Moodle.
+pub(crate) fn is_moodle_site_url(base: &url::Url, url: &url::Url) -> bool {
+    let base_path = base.path().trim_end_matches('/');
+    base.scheme() == url.scheme()
+        && base.origin() == url.origin()
+        && (base_path.is_empty()
+            || url.path() == base_path
+            || url
+                .path()
+                .strip_prefix(base_path)
+                .is_some_and(|suffix| suffix.starts_with('/')))
+}

@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 pub mod assignments;
+pub mod browser;
 pub mod courses;
 pub mod files;
 pub mod forums;
