@@ -14,8 +14,8 @@ Servidor MCP para Moodle (UAM Virtual) con la cuenta del estudiante.
   1. `quiz_info` (con `cmid` o `quizid`): consultar configuración general, tiempo límite, fechas, reglas de acceso (contraseña, Safe Exam Browser / SEB) e historial de intentos.
   2. `quiz_start`: iniciar un nuevo intento o retomar uno en curso (`inprogress`/`overdue`), especificando `password` si es requerido (rechaza automáticamente cuestionarios que exijan SEB).
   3. `quiz_get_page`: leer preguntas analizadas de cada página (inicia en 0), calculando tiempo restante y guardando automáticamente los campos ocultos (`:sequencecheck`).
-  4. `quiz_save`: guardar respuestas intermedias sin finalizar el intento, inyectando de forma automática los campos ocultos y tokens de secuencia correspondientes.
-  5. `quiz_finish`: entrega final definitiva que cierra y califica el intento de forma segura y devuelve la revisión y nota final obtenida.
+  4. `quiz_save`: guardar respuestas intermedias sin finalizar el intento, inyectando de forma automática los campos ocultos y tokens de secuencia correspondientes. Requiere al menos una respuesta.
+  5. `quiz_finish`: entrega final definitiva que cierra y califica el intento y devuelve la revisión y la nota. Reenvía las últimas respuestas guardadas con `quiz_save` en esta sesión. Las preguntas guardadas en una sesión anterior conservan el autoguardado de Moodle. Si `finished` es `false`, revisa `state` antes de reintentar.
   Para consultar intentos ya finalizados anteriormente, usa `quiz_review` (con `attemptid` y `page` opcional, `-1` por defecto).
 - Foros:
   - `forum_list` (`courseid`): lista los foros de un curso con su tipo, descripción en Markdown y fechas.
