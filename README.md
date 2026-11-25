@@ -2,37 +2,26 @@
 
 Servidor MCP (Model Context Protocol) por transporte `stdio` y CLI para Moodle (diseñado para la plataforma UAM Virtual). Permite a modelos de lenguaje (LLMs) y entornos de desarrollo interactuar de forma segura con la API del web service de Moodle utilizando la cuenta del estudiante.
 
-## Características
+## Instalación
 
-- **Transporte estándar MCP**: Comunicación nativa JSON-RPC 2.0 a través de `stdio` compatible con la especificación MCP.
-- **Herramientas genéricas seguras**:
-  - `moodle_whoami`: Consulta información del usuario y del sitio conectado.
-  - `moodle_list_functions`: Descubre funciones disponibles y habilitadas en el servicio web.
-  - `moodle_describe_function`: Describe el estado y modo de solo lectura de una función.
-  - `moodle_read`: Ejecuta funciones de consulta y lectura segura (rechaza funciones de mutación).
-  - `moodle_call`: Ejecuta cualquier función habilitada; aplica exactamente 1 intento sin reintento para mutaciones y reintentos automáticos para lecturas.
-- **Seguridad y privacidad**:
-  - Sanitización automática (`scrub`) de tokens y credenciales en todas las salidas.
-  - Almacén de credenciales seguro en el keyring del sistema operativo con fallback a archivo local protegido con permisos `0600`.
-  - Truncado automático de respuestas masivas a disco si superan el límite configurado (`max_response_bytes`), protegiendo la ventana de contexto del LLM.
+Descarga el paquete de tu plataforma, verifica el archivo con la suma SHA-256 adjunta y extrae `moodle-mcp` (o `moodle-mcp.exe` en Windows) en una carpeta del `PATH`. Hay binarios para Linux x86-64, macOS Apple Silicon y Windows x86-64. [GitHub Releases](https://github.com/robertofabiot/moodle-mcp/releases)
 
-## Instalación y Autenticación Previa
-
-Antes de usar el servidor MCP con cualquier cliente, inicia sesión en tu terminal para almacenar las credenciales de forma segura:
+Para instalar desde el código fuente con Rust:
 
 ```bash
-# Compilar e instalar binario
-cargo install --path .
+cargo install --git https://github.com/robertofabiot/moodle-mcp --locked
+```
 
-# Iniciar sesión e intercambiar credenciales por un token del web service
+## Inicio de sesión
+
+Antes de conectar un cliente MCP, autentícate desde la terminal:
+
+```bash
 moodle-mcp login
-
-# O especificando el tipo de almacén (auto por defecto, keyring o file)
-moodle-mcp --store auto login
-
-# Verificar la sesión activa
 moodle-mcp whoami
 ```
+
+Para otra instalación de Moodle, exporta `MOODLE_BASE_URL` en el entorno que usa el cliente o pasa `--base-url` a `login` y `serve`. El sitio debe tener habilitados los servicios web móviles para tu cuenta.
 
 > **Recarga dinámica de sesión:** Si el servidor MCP ya está en ejecución (por ejemplo, lanzado por Claude Code, Cursor o Claude Desktop) y no había sesión activa o el token expiró, puedes ejecutar `moodle-mcp login` en cualquier terminal. El servidor detectará y recargará automáticamente la nueva sesión en la siguiente invocación de herramienta sin necesidad de reiniciar el servidor MCP ni el cliente.
 
@@ -96,7 +85,7 @@ En tu archivo de configuración de Claude Desktop:
 
 ---
 
-## Herramientas Genéricas Disponibles
+## Herramientas
 
 | Herramienta | Parámetros | Modo / Anotaciones | Descripción |
 |---|---|---|---|
@@ -147,6 +136,28 @@ Puedes personalizar el comportamiento de `moodle-mcp` mediante variables de ento
 
 ---
 
-## Trabajo Futuro
+## Alcance y límites
+
+| Caso | Comportamiento |
+|---|---|
+| Funciones web deshabilitadas para la cuenta | Moodle limita la API a las funciones habilitadas. Si hay una página asociada, puedes abrirla con `moodle_open_in_browser`. |
+| Safe Exam Browser y supervisión de exámenes | Completa el examen en el cliente exigido por Moodle y sigue las reglas de la institución. |
+| Actividades interactivas LTI, SCORM, H5P y plugins sin API | Usa `moodle_open_in_browser` y continúa con tu sesión habitual en Moodle. |
+| Google Drive, Meet y otros sitios externos | Usa el enlace del recurso con tu sesión del servicio externo. |
+| Acciones docentes o administrativas | Moodle aplica los permisos del rol autenticado. |
+| Archivos que superan el límite de entrega | Moodle aplica el máximo del sitio o de la tarea. Consulta la configuración de la tarea con `get_assignment`. |
+
+## Privacidad
+
+- El inicio de sesión intercambia la contraseña por un token de Moodle. El token se guarda en el almacén de credenciales del sistema o, en modo archivo, en `moodle-mcp/credentials.json` dentro del directorio de configuración del usuario. El archivo usa permisos `0600` en Unix.
+- `moodle-mcp logout` elimina la sesión local. Para revocar el token en Moodle, abre **Preferencias → Claves de seguridad** en el sitio y elimina o restablece la clave correspondiente.
+- Los archivos descargados y las respuestas extensas se guardan en el directorio de descargas configurado. Moodle conserva el control sobre permisos y límites de la cuenta.
+- El contenido de foros, páginas y actividades puede proceder de terceros. Los clientes MCP reciben ese contenido como datos del curso.
+
+## Publicación de versiones
+
+El flujo de GitHub Actions compila los paquetes al subir un tag `v*` y los adjunta al borrador del mismo tag. Crea el borrador desde la cuenta propietaria tras subir el tag y publica la versión cuando los paquetes y las sumas SHA-256 estén comprobados.
+
+## Trabajo futuro
 
 - **Recursos MCP (`moodle://…`)**: la exposición de cursos, temarios y archivos mediante URIs de recursos MCP (`moodle://…`) queda fuera del alcance de la versión `0.1.0` y se deja planteada como trabajo futuro; en esta versión toda la inspección y visualización de archivos se realiza mediante herramientas (`moodle_view`, `moodle_download`, `moodle_sync_course`).
