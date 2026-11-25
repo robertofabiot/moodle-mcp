@@ -42,6 +42,9 @@ pub struct AppContext {
     pub env_token_reader: Option<EnvTokenReader>,
     /// Campos ocultos cacheados de cuestionarios indexados por attemptid (ej. sequencecheck).
     pub quiz_hidden: Mutex<HashMap<i64, HashMap<String, String>>>,
+    /// Últimas respuestas guardadas con `quiz_save`, indexadas por attemptid. `quiz_finish` las
+    /// reenvía porque Moodle descarta el autoguardado de las preguntas que llegan sin respuesta.
+    pub quiz_answers: Mutex<HashMap<i64, HashMap<String, String>>>,
 }
 
 impl AppContext {
@@ -61,6 +64,7 @@ impl AppContext {
             session_source: RwLock::new(None),
             env_token_reader: None,
             quiz_hidden: Mutex::new(HashMap::new()),
+            quiz_answers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -89,6 +93,7 @@ impl AppContext {
             }),
             env_token_reader: None,
             quiz_hidden: Mutex::new(HashMap::new()),
+            quiz_answers: Mutex::new(HashMap::new()),
         }
     }
 
