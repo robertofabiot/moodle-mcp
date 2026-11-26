@@ -181,7 +181,7 @@ impl AppContext {
                 *self.session_source.write().await = Some(SessionSource::Store);
                 Ok(arc_creds)
             }
-            Ok(None) => Err(self.no_session_error()),
+            Ok(None) => Err(self.no_session_error().await),
             Err(e) => {
                 tracing::warn!("Error al leer credenciales del almacén: {e}");
                 Err(self.tool_error(
@@ -339,17 +339,18 @@ impl AppContext {
         crate::mcp::output::tool_error_from_moodle(err, tok, priv_tok)
     }
 
-    /// Genera la respuesta estándar para cuando no hay sesión activa.
-    pub fn no_session_error(&self) -> CallToolResult {
+    /// Genera la respuesta estándar para cuando no hay sesión activa. Nombra la URL buscada y
+    /// las que sí tienen sesión, para que el modelo detecte una URL que no coincide.
+    pub async fn no_session_error(&self) -> CallToolResult {
+        let base_url = &self.config.base_url;
+        let saved = self.store.saved_sites().await;
+        let hint = crate::credentials::no_session_hint(base_url, &saved);
         self.tool_error(
             "no_session",
-            "No hay sesión activa de Moodle",
+            format!("No hay sesión de Moodle guardada para {base_url}"),
             None,
             None,
-            Some(
-                "Ejecuta 'moodle-mcp login' en una terminal; no hace falta reiniciar el servidor"
-                    .to_string(),
-            ),
+            Some(format!("{hint}; no hace falta reiniciar el servidor")),
             None,
         )
     }

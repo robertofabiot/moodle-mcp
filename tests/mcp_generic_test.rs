@@ -380,8 +380,15 @@ async fn test_no_session_returns_no_session_error() {
         let env: ToolErrorEnvelope = serde_json::from_str(&text.text).unwrap();
         assert_eq!(env.error.kind, "no_session");
         assert_eq!(
-            env.error.hint.as_deref(),
-            Some("Ejecuta 'moodle-mcp login' en una terminal; no hace falta reiniciar el servidor")
+            env.error.message,
+            format!("No hay sesión de Moodle guardada para {}", mock.uri())
+        );
+        assert_eq!(
+            env.error.hint,
+            Some(format!(
+                "Ejecuta 'moodle-mcp --base-url {} login' en una terminal; no hace falta reiniciar el servidor",
+                mock.uri()
+            ))
         );
     }
 }

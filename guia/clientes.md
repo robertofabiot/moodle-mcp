@@ -6,7 +6,9 @@ moodle-mcp funciona con cualquier cliente MCP que lance servidores por `stdio`. 
 moodle-mcp serve
 ```
 
-Los ejemplos lo muestran así para abreviar: agrega la [URL de tu Moodle](#url-de-tu-moodle) antes de `serve`. Antes de conectarlo, inicia sesión una vez con `moodle-mcp login`. El servidor lee la sesión guardada y, si la renuevas con otro `login`, la recarga en la siguiente llamada sin reiniciar el cliente.
+Los ejemplos lo muestran así para abreviar: si te conectas a más de un Moodle, agrega la [URL de tu Moodle](#url-de-tu-moodle) antes de `serve`. Antes de conectarlo, inicia sesión una vez con `moodle-mcp login`. El servidor lee la sesión guardada y, si la renuevas con otro `login`, la recarga en la siguiente llamada sin reiniciar el cliente.
+
+Se probó de punta a punta, incluido un cuestionario completo, con Claude Code, Codex y Antigravity.
 
 - [Claude Code](#claude-code)
 - [Claude Desktop](#claude-desktop)
@@ -91,12 +93,19 @@ Guarda el archivo y actualiza la lista de servidores.
 
 ## URL de tu Moodle
 
-Indica la URL de tu Moodle con `--base-url`, tanto en `login` como en `serve`, o defínela una sola vez en la variable `MOODLE_BASE_URL`:
+Indica la URL de tu Moodle con `--base-url` al iniciar sesión:
 
 ```bash
 moodle-mcp --base-url https://moodle.example.edu login
+```
+
+Si solo tienes sesión en un Moodle, `serve`, `whoami` y `logout` la usan sin `--base-url`. Si tienes sesión en varios, pasa la misma URL a `serve` o defínela una sola vez en la variable `MOODLE_BASE_URL`:
+
+```bash
 claude mcp add moodle -- moodle-mcp --base-url https://moodle.example.edu serve
 ```
+
+La URL debe coincidir exactamente con la de `login`, incluida la ruta: `https://moodle.example.edu/grado` y `https://moodle.example.edu` son sesiones distintas. Si no coincide, el servidor responde con la URL que buscó y las que tienen sesión guardada.
 
 En los archivos JSON, agrega `"--base-url", "https://moodle.example.edu"` antes de `"serve"` en `args`. El sitio debe tener habilitados los servicios web móviles. Las demás opciones están en la [guía de configuración](configuracion.md).
 
